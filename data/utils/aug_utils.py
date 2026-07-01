@@ -26,6 +26,17 @@ def prepare_thin2thick(
         axis = 0
     else:
         axis_cand = [axis for axis in range(3) if thick2thin_rate_zyx[axis] > 0]
+        if len(axis_cand) == 0:
+            extra_slice = 0
+            apply_thin_thick = False
+            thickness = 0
+            axis = 0
+            return dict(
+                extra_slice=extra_slice,
+                apply_thin_thick=apply_thin_thick,
+                thickness=thickness,
+                axis=axis,
+            )
         axis = random.choice(axis_cand)
         if should_apply_condition(thick2thin_rate_zyx[axis], is_training):
             if thickness is None:

@@ -30,6 +30,14 @@ model:
     depth: 4
     num_encode_blocks: 2
     num_decode_blocks: 1
+    # Z方向の解像度が粗くcropも薄いため、基本はXY畳み込みにする
+    conv_kernel_size_zyx: [1,3,3]
+    # z_conv_interval回に1回だけZ方向も畳み込む
+    z_conv_kernel_size_zyx: [3,3,3]
+    z_conv_interval: 3 # 0にするとZ方向の間引き畳み込みを無効化
+    pool_size_zyx: [1,2,2] # Z方向をdownsampleしない
+    up_kernel_size_zyx: [1,4,4]
+    up_strides_zyx: [1,2,2]
   # 通常のbatch normを使う場合はr_maxを1、d_maxを0としてください
   renorm:
     r_max: 3.0 # 1 for batch norm
@@ -56,11 +64,11 @@ optimizer:
     clip_value: 10
 
 aug:
-  crop_size_zyx: [128,128,128]
+  crop_size_zyx: [8,192,192]
   thick2thin_rate_zyx: [0.2,0.0,0.0]
 
   affine:
-    norm_spacing_zyx: [1.0,1.0,1.0]
+    norm_spacing_zyx: [3.0,0.5,0.5]
     random_rot_deg_zyx: [180,180,180] # +-180度の範囲で回転
     random_flip_axis_zyx: [False,False,True] #x=左右反転
     random_scaling_range_zyx: [[0.15,0.15],[0.15,0.15],[0.15, 0.15]] 
