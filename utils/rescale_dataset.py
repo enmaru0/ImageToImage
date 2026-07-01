@@ -111,7 +111,7 @@ def main():
             img_root.name + "_" + "_".join(map(str, target_scale_zyx))
         )
 
-        img_raw_path_list = list(img_root.glob("**/*.raw"))
+        img_raw_path_list = list(img_root.glob("*.raw"))
         img_hdr_path_list = [i.with_suffix(".hdr") for i in img_raw_path_list]
 
         func = partial(

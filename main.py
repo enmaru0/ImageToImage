@@ -64,7 +64,7 @@ def read_cfg_and_parse_arg():
 
     cfg.source_data_dir, source_rescaled = _resolve_rescaled_dir(cfg.source_data_dir)
     cfg.target_data_dir, target_rescaled = _resolve_rescaled_dir(cfg.target_data_dir)
-    if target_scale_zyx[0] > 2 and not (source_rescaled and target_rescaled):
+    if target_scale_zyx[0] > 5 and not (source_rescaled and target_rescaled):
         raise ValueError(
             "Thickスライスで学習する場合は./utils/rescale_dataset.pyで予めリスケールすることを推奨します"
         )
@@ -90,13 +90,6 @@ def gpu_setting(gpu_str: str, gpu_allow_growth: bool) -> None:
     os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = str(gpu_allow_growth).lower()
 
 
-def _iter_dataset_dirs(split_dir):
-    dataset_dirs = sorted([path for path in split_dir.iterdir() if path.is_dir()])
-    if len(dataset_dirs) == 0:
-        return [split_dir]
-    return dataset_dirs
-
-
 def _has_raw_files(data_dir):
     return data_dir.exists() and any(data_dir.glob("*.raw"))
 
@@ -112,26 +105,30 @@ def prepare_data_dict(source_data_dir, target_data_dir):
             raise FileNotFoundError(target_split_dir)
 
         split_dict = defaultdict(dict)
-        dataset_dirs = _iter_dataset_dirs(source_split_dir)
-        freq = 1.0 / len(dataset_dirs)
-        for dataset_dir in dataset_dirs:
-            data_name = (
-                dataset_dir.name
-                if dataset_dir != source_split_dir
-                else source_split_dir.name
+        pair_list = []
+        for source_raw_path in sorted(source_split_dir.glob("*.raw")):
+            source_hdr_path = source_raw_path.with_suffix(".hdr")
+            target_raw_path = target_split_dir / source_raw_path.name
+            target_hdr_path = target_raw_path.with_suffix(".hdr")
+            if not source_hdr_path.exists():
+                raise FileNotFoundError(f"source hdrが見つかりません: {source_hdr_path}")
+            if not target_raw_path.exists():
+                raise FileNotFoundError(
+                    f"対応するtarget rawが見つかりません: {target_raw_path}"
+                )
+            if not target_hdr_path.exists():
+                raise FileNotFoundError(
+                    f"対応するtarget hdrが見つかりません: {target_hdr_path}"
+                )
+            pair_list.append((source_hdr_path, target_hdr_path))
+        if len(pair_list) == 0:
+            raise FileNotFoundError(
+                f"{source_split_dir} 直下に.rawファイルが見つかりません"
             )
-            pair_list = []
-            for source_raw_path in sorted(dataset_dir.glob("*.raw")):
-                source_hdr_path = source_raw_path.with_suffix(".hdr")
-                rel_hdr_path = source_hdr_path.relative_to(source_split_dir)
-                target_hdr_path = target_split_dir / rel_hdr_path
-                if not target_hdr_path.exists():
-                    raise FileNotFoundError(
-                        f"対応するtarget画像が見つかりません: {target_hdr_path}"
-                    )
-                pair_list.append((source_hdr_path, target_hdr_path))
-            split_dict[data_name]["img_hdr_list"] = pair_list
-            split_dict[data_name]["freq"] = freq
+
+        data_name = source_split_dir.name
+        split_dict[data_name]["img_hdr_list"] = pair_list
+        split_dict[data_name]["freq"] = 1.0
         return split_dict
 
     source_train_dir = source_data_dir / "train"

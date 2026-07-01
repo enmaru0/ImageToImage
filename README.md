@@ -45,31 +45,27 @@ datasets_target/
 
 この形式ではvalidation用の別フォルダが無いため、同じペア一覧をtrainingとvalidationの両方に使用します。
 
-train/validationを分けたい場合は、以下のように `train` / `val` を作ります。
+train/validationを分けたい場合は、以下のように `train` / `val` の直下に画像を置きます。
 
 ```text
 datasets_source/
   train/
-    DatasetA/
-      case001.hdr
-      case001.raw
+    case001.hdr
+    case001.raw
   val/
-    DatasetA/
-      case101.hdr
-      case101.raw
+    case101.hdr
+    case101.raw
 
 datasets_target/
   train/
-    DatasetA/
-      case001.hdr
-      case001.raw
+    case001.hdr
+    case001.raw
   val/
-    DatasetA/
-      case101.hdr
-      case101.raw
+    case101.hdr
+    case101.raw
 ```
 
-`train` / `val` 直下に直接画像を置く形式にも対応しています。sourceとtargetの画像サイズ・spacingは一致している必要があります。
+サブフォルダは再帰的に探索しません。sourceとtargetの画像サイズ・spacingは一致している必要があります。
 
 ## 現在の標準設定
 
