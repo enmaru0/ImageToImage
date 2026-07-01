@@ -1,0 +1,50 @@
+{
+  "[python]": {
+      "editor.defaultFormatter": "charliermarsh.ruff",
+      "editor.formatOnSave": true,
+      "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit"
+      }
+  },
+  "notebook.formatOnSave.enabled": true,
+  "notebook.codeActionsOnSave": {
+    "notebook.source.organizeImports": "explicit"
+  },
+  "git.ignoreLimitWarning": true,
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/*/**": true,
+    "**/results/*/**": true,
+    "**/submit/*/**": true,
+    "**/datasets*/**": true,
+    ".ruff_cache": true,
+    "fail":true
+  },
+  "cSpell.enabled": true,
+  "python.analysis.exclude": [
+    "**/.git/objects/**",
+    "**/.git/subtree-cache/**",
+    "**/node_modules/*/**",
+    "**/results/*/**",
+    "**/submit/*/**",
+    "**/datasets*/**",
+    ".ruff_cache"
+  ],
+  "jupyter.notebookFileRoot": "${workspaceFolder}",
+  "cSpell.words": [
+    "clipvalue",
+    "direnv",
+    "docstrings",
+    "dotlist",
+    "mypy",
+    "nvcr",
+    "pycodestyle",
+    "pyenv",
+    "pyproject",
+    "pytest",
+    "PYTHONPATH",
+    "pytype",
+    "venv"
+  ]
+}

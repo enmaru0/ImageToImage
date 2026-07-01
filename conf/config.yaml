@@ -1,0 +1,117 @@
+# 実験するたびにここを変更しない。基本はスクリプトから変更する。
+# python train.py --override exp_dir=results/test2 model.unet.start_ch=32
+# 上記のように--overrideの後に変更したい変数を書くことで設定を変更できる
+exp_dir: results/test
+
+source_data_dir: datasets_source
+target_data_dir: datasets_target
+num_train_steps: 100000
+eval_every: 1000
+num_workers: 12
+batch_size: 16 # デフォルトの設定だとg6eで最大48
+prefetch_size: 2
+
+debug_time: False
+debug_train_val: False
+debug_dataloader: False # debug_dataloaderで設定されるので触る必要はない
+gpu: 0
+gpu_allow_growth: False
+enable_profiling: False
+
+restore: "" # 実験を再開する場合はここにチェックポイントのパスを指定
+finetune: "" # 事前学習済みモデルを指定する場合はここにパスを指定
+
+model:
+  name: unet
+  input_num_channel: 1
+  num_channel: 1 # target image channels
+  unet:
+    start_ch: 8
+    depth: 4
+    num_encode_blocks: 2
+    num_decode_blocks: 1
+  # 通常のbatch normを使う場合はr_maxを1、d_maxを0としてください
+  renorm:
+    r_max: 3.0 # 1 for batch norm
+    d_max: 5.0 # 0 for batch norm
+    warmup_steps: 5000
+    change_d_steps: 25000
+    change_r_steps: 40000
+
+optimizer:
+  name: adamw
+  sgd:
+    warmup_lr: 1e-4
+    max_lr: 0.1
+    warmup_ratio: 0.3
+    wd: 1e-6
+    momentum: 0.9
+    use_nesterov: True
+    clip_value: 10
+  adamw:
+    warmup_lr: 1e-5
+    max_lr: 1e-3
+    warmup_ratio: 0.3
+    wd: 1e-4
+    clip_value: 10
+
+aug:
+  crop_size_zyx: [128,128,128]
+  thick2thin_rate_zyx: [0.2,0.0,0.0]
+
+  affine:
+    norm_spacing_zyx: [1.0,1.0,1.0]
+    random_rot_deg_zyx: [180,180,180] # +-180度の範囲で回転
+    random_flip_axis_zyx: [False,False,True] #x=左右反転
+    random_scaling_range_zyx: [[0.15,0.15],[0.15,0.15],[0.15, 0.15]] 
+    random_shift_rate_zyx: [0.,0.,0.] # 回転中心をランダムに選ぶのでここは０にした
+  
+  random_sharpness:
+    prob: 0.1 # 10%の確率でシャープネスを加える
+    sigma: 3.0
+    alpha_range: [0.,2.]
+  random_gauss_filter:
+    prob: 0.1
+    sigma_range: [0.5,2.0]
+  random_gauss_noise:
+    prob: 0.1
+    stddev_range: [0.0,0.05]
+  random_normalize:
+    prob: 0.5 # 50%の確率で正規化を行う
+    random_center_deviation: 0.5 # 画像正規化時の中央値を変動させる(0-1)
+    random_range_deviation: 0.1 # 画像正規化時の範囲を変動させる(0-1)
+  random_gamma_correction:
+    prob: 0.5
+    random_gamma_range: [1.0,1.0] # 1.0-1.0で無効化 (0.65,0.65くらいがMRだとおすすめ)
+  
+  # ランダムクロップの中心を決める方法（テスト時は臓器中心としている）
+  # data/dataloader_utils.pyのget_centerを参照
+  random_crop_method:
+    body: 0.0
+    organ: 0.9
+    organ_crop: 0.1
+    image: 0.0
+  margin: 15 # mm 臓器内でクロップ範囲を決める際のマージン
+  crop_keep_ratio: 0.3 # organ_cropのときにどれくらい元領域を残すか
+
+i2i_rfr:
+  p: 1.0 # 論文デフォルト: L1
+  t_min: 0.01
+  inference_steps: 3
+  clip_output: True
+
+loss:
+  rfr:
+    weight: 1.0
+
+image:
+  modality: CT # CT or MR　画像の正規化方法を変えます
+  CT:
+    window_level: 60 # HU
+    window_width: 600 # HU
+  MR:
+    min_percentile: 5 # %
+    max_percentile: 95 # %
+
+bit_info:
+  padding_bit: 15
