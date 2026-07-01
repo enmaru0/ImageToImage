@@ -27,6 +27,26 @@ target_data_dir: datasets_target
 
 sourceとtargetには、同じ相対パス・同じファイル名のペア画像を置きます。
 
+指定したフォルダ直下に `.hdr/.raw` がある場合は、その一覧をそのまま使います。
+
+```text
+datasets_source/
+  case001.hdr
+  case001.raw
+  case002.hdr
+  case002.raw
+
+datasets_target/
+  case001.hdr
+  case001.raw
+  case002.hdr
+  case002.raw
+```
+
+この形式ではvalidation用の別フォルダが無いため、同じペア一覧をtrainingとvalidationの両方に使用します。
+
+train/validationを分けたい場合は、以下のように `train` / `val` を作ります。
+
 ```text
 datasets_source/
   train/

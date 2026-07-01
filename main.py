@@ -97,13 +97,15 @@ def _iter_dataset_dirs(split_dir):
     return dataset_dirs
 
 
+def _has_raw_files(data_dir):
+    return data_dir.exists() and any(data_dir.glob("*.raw"))
+
+
 def prepare_data_dict(source_data_dir, target_data_dir):
     source_data_dir = Path(source_data_dir)
     target_data_dir = Path(target_data_dir)
 
-    def _make_split_dict(split):
-        source_split_dir = source_data_dir / split
-        target_split_dir = target_data_dir / split
+    def _make_split_dict(source_split_dir, target_split_dir):
         if not source_split_dir.exists():
             raise FileNotFoundError(source_split_dir)
         if not target_split_dir.exists():
@@ -132,8 +134,32 @@ def prepare_data_dict(source_data_dir, target_data_dir):
             split_dict[data_name]["freq"] = freq
         return split_dict
 
-    train_dict = _make_split_dict("train")
-    val_dict = _make_split_dict("val")
+    source_train_dir = source_data_dir / "train"
+    target_train_dir = target_data_dir / "train"
+    source_val_dir = source_data_dir / "val"
+    target_val_dir = target_data_dir / "val"
+
+    if source_train_dir.exists() or target_train_dir.exists():
+        train_dict = _make_split_dict(source_train_dir, target_train_dir)
+        if source_val_dir.exists() or target_val_dir.exists():
+            val_dict = _make_split_dict(source_val_dir, target_val_dir)
+        else:
+            logging.warning(
+                "valフォルダが見つからないため、trainデータをvalidationにも使用します"
+            )
+            val_dict = _make_split_dict(source_train_dir, target_train_dir)
+    elif _has_raw_files(source_data_dir) and _has_raw_files(target_data_dir):
+        logging.warning(
+            "train/valフォルダが見つからないため、指定フォルダ直下の画像を"
+            "train/validationの両方に使用します"
+        )
+        train_dict = _make_split_dict(source_data_dir, target_data_dir)
+        val_dict = _make_split_dict(source_data_dir, target_data_dir)
+    else:
+        raise FileNotFoundError(
+            "source/targetの直下、またはtrainフォルダ内に.rawファイルが見つかりません"
+        )
+
     for value in val_dict.values():
         value["freq"] = -1
     return train_dict, val_dict
