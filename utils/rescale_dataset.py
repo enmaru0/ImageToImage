@@ -6,7 +6,7 @@ from pathlib import Path
 import commonlib
 import numpy as np
 from irg import read_hdr, read_raw, read_re4, save_raw, save_re4
-from omegaconf import OmegaConf
+from omegaconf import ListConfig, OmegaConf
 from tqdm import tqdm
 
 
@@ -100,12 +100,20 @@ def read_cfg_and_parse_arg():
     return cfg
 
 
+def _to_path_list(data_dir):
+    if isinstance(data_dir, (list, tuple, ListConfig)):
+        return [Path(path) for path in data_dir]
+    return [Path(data_dir)]
+
+
 def main():
     cfg = read_cfg_and_parse_arg()
     target_scale_zyx = np.array(cfg.aug.affine.norm_spacing_zyx)
     target_scale_zyx = target_scale_zyx.astype(np.float32)
 
-    data_roots = [Path(cfg.source_data_dir), Path(cfg.target_data_dir)]
+    data_roots = _to_path_list(cfg.source_data_dir) + _to_path_list(
+        cfg.target_data_dir
+    )
     for img_root in dict.fromkeys(data_roots):
         save_root = img_root.parent / (
             img_root.name + "_" + "_".join(map(str, target_scale_zyx))

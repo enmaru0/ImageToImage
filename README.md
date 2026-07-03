@@ -25,7 +25,29 @@ source_data_dir: datasets_source
 target_data_dir: datasets_target
 ```
 
+複数のペアフォルダを使う場合は、sourceとtargetを同じ順番・同じ数のリストで指定します。
+
+```yaml
+source_data_dir:
+  - datasets_source_a
+  - datasets_source_b
+target_data_dir:
+  - datasets_target_a
+  - datasets_target_b
+```
+
+コマンドラインから指定する場合は以下のように書けます。
+
+```bash
+python main.py --overrides \
+  "source_data_dir=[datasets_source_a,datasets_source_b]" \
+  "target_data_dir=[datasets_target_a,datasets_target_b]"
+```
+
+各フォルダは画像枚数に応じた重みでサンプリングされます。
+
 sourceとtargetには、同じ相対パス・同じファイル名のペア画像を置きます。
+同名のtarget画像が無いsource画像はwarningを出してスキップします。
 
 指定したフォルダ直下に `.hdr/.raw` がある場合は、その一覧をそのまま使います。
 
@@ -211,6 +233,24 @@ image:
 ```
 
 MRの場合は `image.modality: MR` にし、percentileベースの正規化値を使います。
+
+## 学習が改善しない場合
+
+まず `debug_dataloader.py` と `predict.py` の `comparison` 出力で、入力、出力、正解が同じcrop位置に並んでいるか確認してください。位置がずれている場合は、source/targetのspacing、size、ファイル対応が一致していない可能性があります。
+
+画像改善がほとんど見えない場合は、最初はaugmentationを弱めた設定で過学習できるか確認するのがおすすめです。
+
+```bash
+python main.py --overrides \
+  aug.thick2thin_rate_zyx=[0.0,0.0,0.0] \
+  aug.random_normalize.prob=0.0 \
+  aug.random_gamma_correction.prob=0.0 \
+  aug.random_sharpness.prob=0.0 \
+  aug.random_gauss_filter.prob=0.0 \
+  aug.random_gauss_noise.prob=0.0
+```
+
+少数症例で `mae` や `val_mae` が下がり、`comparison` で出力が正解に近づくことを確認してから、augmentationを戻してください。I2I-RFRの推論はノイズから開始するため、確認時は `--inference-steps 5` や `--inference-steps 10` も試す価値があります。
 
 ## 出力と除外対象
 

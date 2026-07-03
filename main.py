@@ -18,6 +18,18 @@ from models import build_unet
 from trainer import CustomModel
 
 
+def _to_path_list(data_dir):
+    if isinstance(data_dir, (list, tuple, ListConfig)):
+        return [Path(path) for path in data_dir]
+    return [Path(data_dir)]
+
+
+def _to_config_path(path_list):
+    if len(path_list) == 1:
+        return str(path_list[0])
+    return [str(path) for path in path_list]
+
+
 def read_cfg_and_parse_arg():
     # コマンドライン引数と設定ファイルを読み込む関数
     parser = argparse.ArgumentParser()
@@ -42,8 +54,12 @@ def read_cfg_and_parse_arg():
 
     # ディレクトリを Path 型に変換
     cfg.exp_dir = Path(cfg.exp_dir)
-    cfg.source_data_dir = Path(cfg.source_data_dir)
-    cfg.target_data_dir = Path(cfg.target_data_dir)
+    source_data_dirs = _to_path_list(cfg.source_data_dir)
+    target_data_dirs = _to_path_list(cfg.target_data_dir)
+    if len(source_data_dirs) != len(target_data_dirs):
+        raise ValueError(
+            "source_data_dirとtarget_data_dirは同じ数だけ指定してください"
+        )
     cfg.restore = Path(cfg.restore) if cfg.restore else None
     cfg.finetune = Path(cfg.finetune) if cfg.finetune else None
 
@@ -62,9 +78,23 @@ def read_cfg_and_parse_arg():
             return rescaled_dir, True
         return data_dir, False
 
-    cfg.source_data_dir, source_rescaled = _resolve_rescaled_dir(cfg.source_data_dir)
-    cfg.target_data_dir, target_rescaled = _resolve_rescaled_dir(cfg.target_data_dir)
-    if target_scale_zyx[0] > 5 and not (source_rescaled and target_rescaled):
+    source_rescaled_list = []
+    target_rescaled_list = []
+    source_rescaled_flags = []
+    target_rescaled_flags = []
+    for source_data_dir, target_data_dir in zip(source_data_dirs, target_data_dirs):
+        source_rescaled, source_rescaled_flag = _resolve_rescaled_dir(source_data_dir)
+        target_rescaled, target_rescaled_flag = _resolve_rescaled_dir(target_data_dir)
+        source_rescaled_list.append(source_rescaled)
+        target_rescaled_list.append(target_rescaled)
+        source_rescaled_flags.append(source_rescaled_flag)
+        target_rescaled_flags.append(target_rescaled_flag)
+
+    cfg.source_data_dir = _to_config_path(source_rescaled_list)
+    cfg.target_data_dir = _to_config_path(target_rescaled_list)
+    if target_scale_zyx[0] > 5 and not all(
+        source_rescaled_flags + target_rescaled_flags
+    ):
         raise ValueError(
             "Thickスライスで学習する場合は./utils/rescale_dataset.pyで予めリスケールすることを推奨します"
         )
@@ -95,10 +125,14 @@ def _has_raw_files(data_dir):
 
 
 def prepare_data_dict(source_data_dir, target_data_dir):
-    source_data_dir = Path(source_data_dir)
-    target_data_dir = Path(target_data_dir)
+    source_data_dirs = _to_path_list(source_data_dir)
+    target_data_dirs = _to_path_list(target_data_dir)
+    if len(source_data_dirs) != len(target_data_dirs):
+        raise ValueError(
+            "source_data_dirとtarget_data_dirは同じ数だけ指定してください"
+        )
 
-    def _make_split_dict(source_split_dir, target_split_dir):
+    def _make_split_dict(source_split_dir, target_split_dir, data_name):
         if not source_split_dir.exists():
             raise FileNotFoundError(source_split_dir)
         if not target_split_dir.exists():
@@ -106,57 +140,92 @@ def prepare_data_dict(source_data_dir, target_data_dir):
 
         split_dict = defaultdict(dict)
         pair_list = []
+        skip_count = 0
         for source_raw_path in sorted(source_split_dir.glob("*.raw")):
             source_hdr_path = source_raw_path.with_suffix(".hdr")
             target_raw_path = target_split_dir / source_raw_path.name
             target_hdr_path = target_raw_path.with_suffix(".hdr")
             if not source_hdr_path.exists():
-                raise FileNotFoundError(f"source hdrが見つかりません: {source_hdr_path}")
-            if not target_raw_path.exists():
-                raise FileNotFoundError(
-                    f"対応するtarget rawが見つかりません: {target_raw_path}"
+                skip_count += 1
+                logging.warning(f"source hdrがないためスキップします: {source_hdr_path}")
+                continue
+            if not target_raw_path.exists() or not target_hdr_path.exists():
+                skip_count += 1
+                logging.warning(
+                    "対応するtargetがないためスキップします: "
+                    f"{source_raw_path.name}"
                 )
-            if not target_hdr_path.exists():
-                raise FileNotFoundError(
-                    f"対応するtarget hdrが見つかりません: {target_hdr_path}"
-                )
+                continue
             pair_list.append((source_hdr_path, target_hdr_path))
         if len(pair_list) == 0:
             raise FileNotFoundError(
-                f"{source_split_dir} 直下に.rawファイルが見つかりません"
+                f"{source_split_dir} 直下に使用可能なペア画像が見つかりません"
             )
+        if skip_count > 0:
+            logging.warning(f"{source_split_dir}: {skip_count}件をスキップしました")
 
-        data_name = source_split_dir.name
         split_dict[data_name]["img_hdr_list"] = pair_list
-        split_dict[data_name]["freq"] = 1.0
+        split_dict[data_name]["freq"] = len(pair_list)
         return split_dict
 
-    source_train_dir = source_data_dir / "train"
-    target_train_dir = target_data_dir / "train"
-    source_val_dir = source_data_dir / "val"
-    target_val_dir = target_data_dir / "val"
+    def _update_unique(dst_dict, src_dict):
+        for data_name, value in src_dict.items():
+            unique_name = data_name
+            count = 1
+            while unique_name in dst_dict:
+                unique_name = f"{data_name}_{count}"
+                count += 1
+            dst_dict[unique_name] = value
 
-    if source_train_dir.exists() or target_train_dir.exists():
-        train_dict = _make_split_dict(source_train_dir, target_train_dir)
-        if source_val_dir.exists() or target_val_dir.exists():
-            val_dict = _make_split_dict(source_val_dir, target_val_dir)
-        else:
-            logging.warning(
-                "valフォルダが見つからないため、trainデータをvalidationにも使用します"
+    train_dict = defaultdict(dict)
+    val_dict = defaultdict(dict)
+    for source_data_dir, target_data_dir in zip(source_data_dirs, target_data_dirs):
+        source_train_dir = source_data_dir / "train"
+        target_train_dir = target_data_dir / "train"
+        source_val_dir = source_data_dir / "val"
+        target_val_dir = target_data_dir / "val"
+
+        if source_train_dir.exists() or target_train_dir.exists():
+            train_part = _make_split_dict(
+                source_train_dir, target_train_dir, f"{source_data_dir.name}_train"
             )
-            val_dict = _make_split_dict(source_train_dir, target_train_dir)
-    elif _has_raw_files(source_data_dir) and _has_raw_files(target_data_dir):
-        logging.warning(
-            "train/valフォルダが見つからないため、指定フォルダ直下の画像を"
-            "train/validationの両方に使用します"
-        )
-        train_dict = _make_split_dict(source_data_dir, target_data_dir)
-        val_dict = _make_split_dict(source_data_dir, target_data_dir)
-    else:
-        raise FileNotFoundError(
-            "source/targetの直下、またはtrainフォルダ内に.rawファイルが見つかりません"
-        )
+            if source_val_dir.exists() or target_val_dir.exists():
+                val_part = _make_split_dict(
+                    source_val_dir, target_val_dir, f"{source_data_dir.name}_val"
+                )
+            else:
+                logging.warning(
+                    f"{source_data_dir} のvalフォルダが見つからないため、"
+                    "trainデータをvalidationにも使用します"
+                )
+                val_part = _make_split_dict(
+                    source_train_dir,
+                    target_train_dir,
+                    f"{source_data_dir.name}_train_as_val",
+                )
+        elif _has_raw_files(source_data_dir) and _has_raw_files(target_data_dir):
+            logging.warning(
+                f"{source_data_dir} にtrain/valフォルダが見つからないため、"
+                "指定フォルダ直下の画像をtrain/validationの両方に使用します"
+            )
+            train_part = _make_split_dict(
+                source_data_dir, target_data_dir, source_data_dir.name
+            )
+            val_part = _make_split_dict(
+                source_data_dir, target_data_dir, f"{source_data_dir.name}_as_val"
+            )
+        else:
+            raise FileNotFoundError(
+                f"{source_data_dir} と {target_data_dir} の直下、"
+                "またはtrainフォルダ内に.rawファイルが見つかりません"
+            )
 
+        _update_unique(train_dict, train_part)
+        _update_unique(val_dict, val_part)
+
+    train_total = sum(value["freq"] for value in train_dict.values())
+    for value in train_dict.values():
+        value["freq"] = value["freq"] / train_total
     for value in val_dict.values():
         value["freq"] = -1
     return train_dict, val_dict
