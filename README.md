@@ -154,15 +154,38 @@ bash submit/exp1.sh
 python predict.py results/exp_0001/checkpoints/model_latest.keras
 ```
 
+predictは基本的に学習時に保存された `output.yaml` を参照します。推論時だけI2I-RFRの更新回数などを変えたい場合は、以下のオプションで上書きできます。
+
+```bash
+python predict.py results/exp_0001/checkpoints/model_latest.keras \
+  --inference-steps 5 \
+  --t-min 0.01 \
+  --clip-output
+```
+
 出力は以下に保存されます。
 
 ```text
 results/exp_0001/preds/
 ```
 
-各症例はcrop空間の `.hdr/.raw` として保存されます。出力spacingは
-`aug.affine.norm_spacing_zyx`、画素値はtarget側のclip値で逆正規化した
-`int16` です。
+各症例はcrop空間の `.hdr/.raw` として保存されます。
+
+```text
+case001.input.hdr  # 入力source画像
+case001.input.raw
+case001.hdr        # 変換後の出力画像
+case001.raw
+case001.target.hdr # 正解target画像
+case001.target.raw
+case001.comparison.hdr # input | output | targetをX方向に結合した比較用画像
+case001.comparison.raw
+```
+
+出力spacingは `aug.affine.norm_spacing_zyx` です。出力画像の画素値は
+target側のclip値で逆正規化した `int16`、入力画像はcrop後のsource画像を
+`int16` で保存します。正解画像がある場合はtarget画像も保存し、
+`comparison` は入力、出力、正解を横並びで確認するための3D volumeです。
 
 ## 主要設定
 

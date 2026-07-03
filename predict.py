@@ -28,11 +28,50 @@ def reverse_normalize_img(img, min_val, max_val):
     return img
 
 
+def to_int16_img(img):
+    return np.rint(img).astype(np.int16)
+
+
+def concat_comparison_img(img_list, separator_width=4):
+    separator_shape = list(img_list[0].shape)
+    separator_shape[2] = separator_width
+    separator = np.zeros(separator_shape, dtype=img_list[0].dtype)
+    out = []
+    for img in img_list:
+        if len(out) > 0:
+            out.append(separator)
+        out.append(img)
+    return np.concatenate(out, axis=2)
+
+
 if __name__ == "__main__":
     logging.set_verbosity(logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("checkpoint_path", type=Path)
     parser.add_argument("--gpu", default="0", type=str, help="gpu num (default 0)")
+    parser.add_argument(
+        "--inference-steps",
+        type=int,
+        default=None,
+        help="I2I-RFRのEuler更新回数。未指定なら学習時のoutput.yamlを使う",
+    )
+    parser.add_argument(
+        "--t-min",
+        type=float,
+        default=None,
+        help="I2I-RFRのt下限。未指定なら学習時のoutput.yamlを使う",
+    )
+    clip_group = parser.add_mutually_exclusive_group()
+    clip_group.add_argument(
+        "--clip-output",
+        action="store_true",
+        help="推論出力を0-1にclipする",
+    )
+    clip_group.add_argument(
+        "--no-clip-output",
+        action="store_true",
+        help="推論出力の0-1 clipを無効化する",
+    )
     args = parser.parse_args()
 
     checkpoint_path: Path = args.checkpoint_path
@@ -42,6 +81,14 @@ if __name__ == "__main__":
     cfg = OmegaConf.load(cfg_path)
     cfg.batch_size = 1
     cfg.debug_dataloader = True
+    if args.inference_steps is not None:
+        cfg.i2i_rfr.inference_steps = args.inference_steps
+    if args.t_min is not None:
+        cfg.i2i_rfr.t_min = args.t_min
+    if args.clip_output:
+        cfg.i2i_rfr.clip_output = True
+    if args.no_clip_output:
+        cfg.i2i_rfr.clip_output = False
 
     # 保存場所を作成
     save_dir = checkpoint_path.parents[1] / "preds"
@@ -62,14 +109,32 @@ if __name__ == "__main__":
     spacing_zyx = np.array(cfg.aug.affine.norm_spacing_zyx, np.float32)
     for data in tqdm(test_loader):
         pred = model.predict_step(data).numpy()
+        source = data["imgs"].numpy()
+        target = data.get("target_imgs")
+        if target is not None:
+            target = target.numpy()
         keys = [key.decode() for key in data["img_hdr_list"].numpy()]
         target_min_clip_vals = data["target_min_clip_vals"].numpy()
         target_max_clip_vals = data["target_max_clip_vals"].numpy()
 
         for idx, key in enumerate(keys):
+            source_img = source[idx, :, :, :, 0]
+            source_img = to_int16_img(source_img)
+            save_raw(source_img, spacing_zyx, save_dir / f"{key}.input.hdr")
+
             pred_img = pred[idx, :, :, :, 0]
             pred_img = reverse_normalize_img(
                 pred_img, target_min_clip_vals[idx], target_max_clip_vals[idx]
             )
-            pred_img = np.rint(pred_img).astype(np.int16)
+            pred_img = to_int16_img(pred_img)
             save_raw(pred_img, spacing_zyx, save_dir / f"{key}.hdr")
+
+            comparison_img_list = [source_img, pred_img]
+            if target is not None:
+                target_img = target[idx, :, :, :, 0]
+                target_img = to_int16_img(target_img)
+                save_raw(target_img, spacing_zyx, save_dir / f"{key}.target.hdr")
+                comparison_img_list.append(target_img)
+
+            comparison_img = concat_comparison_img(comparison_img_list)
+            save_raw(comparison_img, spacing_zyx, save_dir / f"{key}.comparison.hdr")
