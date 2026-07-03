@@ -5,6 +5,7 @@ import keras
 import numpy as np
 import tensorflow as tf
 from absl import logging
+from irg import save_raw
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
@@ -19,6 +20,12 @@ def load_checkpoint(checkpoint_path) -> tuple[CustomModel, int]:
     model = keras.models.load_model(checkpoint_path, safe_mode=False)
     step = model.optimizer.iterations.numpy()
     return model, step
+
+
+def reverse_normalize_img(img, min_val, max_val):
+    img = img * (max_val - min_val)
+    img = img + min_val
+    return img
 
 
 if __name__ == "__main__":
@@ -52,21 +59,17 @@ if __name__ == "__main__":
     model.cfg = cfg
     logging.info(f"Loaded from: {checkpoint_path} (step: {step})")
 
+    spacing_zyx = np.array(cfg.aug.affine.norm_spacing_zyx, np.float32)
     for data in tqdm(test_loader):
         pred = model.predict_step(data).numpy()
-        source = data["imgs"].numpy()
-        target = data["target_imgs"].numpy()
         keys = [key.decode() for key in data["img_hdr_list"].numpy()]
+        target_min_clip_vals = data["target_min_clip_vals"].numpy()
+        target_max_clip_vals = data["target_max_clip_vals"].numpy()
 
         for idx, key in enumerate(keys):
-            save_path = save_dir / f"{key}.npz"
-            np.savez_compressed(
-                save_path,
-                pred=pred[idx],
-                source=source[idx],
-                target=target[idx],
-                source_min_clip_val=data["min_clip_vals"][idx].numpy(),
-                source_max_clip_val=data["max_clip_vals"][idx].numpy(),
-                target_min_clip_val=data["target_min_clip_vals"][idx].numpy(),
-                target_max_clip_val=data["target_max_clip_vals"][idx].numpy(),
+            pred_img = pred[idx, :, :, :, 0]
+            pred_img = reverse_normalize_img(
+                pred_img, target_min_clip_vals[idx], target_max_clip_vals[idx]
             )
+            pred_img = np.rint(pred_img).astype(np.int16)
+            save_raw(pred_img, spacing_zyx, save_dir / f"{key}.hdr")

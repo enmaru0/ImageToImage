@@ -160,7 +160,9 @@ python predict.py results/exp_0001/checkpoints/model_latest.keras
 results/exp_0001/preds/
 ```
 
-各 `.npz` には、crop空間の `pred`、`source`、`target` と、正規化に使ったclip値が入ります。
+各症例はcrop空間の `.hdr/.raw` として保存されます。出力spacingは
+`aug.affine.norm_spacing_zyx`、画素値はtarget側のclip値で逆正規化した
+`int16` です。
 
 ## 主要設定
 
