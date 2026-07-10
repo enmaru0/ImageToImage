@@ -7,9 +7,9 @@ source_data_dir: datasets_source
 target_data_dir: datasets_target
 num_train_steps: 100000
 eval_every: 1000
-num_workers: 12
-batch_size: 16 # デフォルトの設定だとg6eで最大48
-prefetch_size: 2
+num_workers: 4
+batch_size: 4 # I2I-RFRではsource/targetとRFR中間テンソルを保持するため小さめにする
+prefetch_size: 1
 
 debug_time: False
 debug_train_val: False

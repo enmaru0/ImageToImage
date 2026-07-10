@@ -1,4 +1,5 @@
 import argparse
+import gc
 from pathlib import Path
 
 import keras
@@ -72,6 +73,23 @@ if __name__ == "__main__":
         action="store_true",
         help="推論出力の0-1 clipを無効化する",
     )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="推論データローダの並列数。OOM時は1を推奨",
+    )
+    parser.add_argument(
+        "--prefetch-size",
+        type=int,
+        default=1,
+        help="推論データローダのprefetch数。OOM時は1を推奨",
+    )
+    parser.add_argument(
+        "--no-save-comparison",
+        action="store_true",
+        help="input/output/target結合画像を保存しない",
+    )
     args = parser.parse_args()
 
     checkpoint_path: Path = args.checkpoint_path
@@ -80,6 +98,8 @@ if __name__ == "__main__":
     cfg_path = checkpoint_path.parents[1] / "output.yaml"
     cfg = OmegaConf.load(cfg_path)
     cfg.batch_size = 1
+    cfg.num_workers = args.num_workers
+    cfg.prefetch_size = args.prefetch_size
     cfg.debug_dataloader = True
     if args.inference_steps is not None:
         cfg.i2i_rfr.inference_steps = args.inference_steps
@@ -136,5 +156,11 @@ if __name__ == "__main__":
                 save_raw(target_img, spacing_zyx, save_dir / f"{key}.target.hdr")
                 comparison_img_list.append(target_img)
 
-            comparison_img = concat_comparison_img(comparison_img_list)
-            save_raw(comparison_img, spacing_zyx, save_dir / f"{key}.comparison.hdr")
+            if not args.no_save_comparison:
+                comparison_img = concat_comparison_img(comparison_img_list)
+                save_raw(
+                    comparison_img, spacing_zyx, save_dir / f"{key}.comparison.hdr"
+                )
+
+        del pred, source, target
+        gc.collect()

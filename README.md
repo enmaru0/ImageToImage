@@ -185,6 +185,16 @@ python predict.py results/exp_0001/checkpoints/model_latest.keras \
   --clip-output
 ```
 
+GPUメモリに空きがあるのにOOMが出る場合は、CPU側のデータローダや
+比較画像作成が原因のことがあります。まず次の設定で確認してください。
+
+```bash
+python predict.py results/exp_0001/checkpoints/model_latest.keras \
+  --num-workers 1 \
+  --prefetch-size 1 \
+  --no-save-comparison
+```
+
 出力は以下に保存されます。
 
 ```text
@@ -237,6 +247,21 @@ MRの場合は `image.modality: MR` にし、percentileベースの正規化値�
 ## 学習が改善しない場合
 
 まず `debug_dataloader.py` と `predict.py` の `comparison` 出力で、入力、出力、正解が同じcrop位置に並んでいるか確認してください。位置がずれている場合は、source/targetのspacing、size、ファイル対応が一致していない可能性があります。
+
+## 学習中にOOMが出る場合
+
+I2I-RFRではsource画像に加えてtarget画像、ノイズ画像、noisy target、2チャンネル入力を保持するため、以前のsegmentation学習よりメモリ使用量が大きくなります。
+
+まず `batch_size` を下げてください。CPU側のメモリ不足が疑わしい場合は、DataLoaderの並列数も下げます。
+
+```bash
+python main.py --overrides \
+  batch_size=2 \
+  num_workers=2 \
+  prefetch_size=1
+```
+
+GPUメモリに空きがあるように見える場合でも、`tf.data` の並列crop/affine処理やprefetchでCPU RAM側がOOMになることがあります。
 
 画像改善がほとんど見えない場合は、最初はaugmentationを弱めた設定で過学習できるか確認するのがおすすめです。
 

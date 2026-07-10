@@ -3,6 +3,9 @@ EXP_DIR=results/exp_0001
 # 3.0x0.5x0.5mmでImage-to-image translationを学習させるためのスクリプト
 OPTIONS="--overrides
         exp_dir=${EXP_DIR}
+        batch_size=4
+        num_workers=4
+        prefetch_size=1
         aug.crop_size_zyx=[8,192,192]
         aug.random_crop_method.body=0.0
         aug.random_crop_method.organ=0.9

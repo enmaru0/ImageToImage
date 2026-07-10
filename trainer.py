@@ -100,12 +100,11 @@ class CustomModel(Model):
                 [self.concat_i2i_input(imgs, noisy_target), img_msks], training=True
             )
 
-            total_loss = self._compute_loss_and_metrics(
-                target_imgs, preds, img_msks, t=t
-            )
+            total_loss = self._compute_rfr_total_loss(target_imgs, preds, img_msks, t)
         trainable_weights = self.trainable_variables
         gradients = tape.gradient(total_loss, trainable_weights)
         self.optimizer.apply_gradients(zip(gradients, trainable_weights))
+        self._update_metrics(target_imgs, preds, img_msks, t=t)
 
         return self._get_metrics_result()
 
@@ -124,11 +123,30 @@ class CustomModel(Model):
             data["target_max_clip_vals"],
         )
         img_msks = self._get_img_msks(data["msks"], self.cfg.bit_info.padding_bit)
-        _ = self._compute_loss_and_metrics(target_imgs, logits, img_msks, t=None)
+        self._update_metrics(target_imgs, logits, img_msks, t=None)
 
         return self._get_metrics_result()
 
-    def _compute_loss_and_metrics(self, target_imgs, preds, img_msks, t=None):
+    def _compute_rfr_total_loss(self, target_imgs, preds, img_msks, t):
+        denominator = self.masked_denominator(img_msks, target_imgs)
+        p = float(self.cfg.i2i_rfr.p)
+        abs_error = ops.abs(target_imgs - preds)
+        if p == 1.0:
+            pixel_error = abs_error
+        elif p == 2.0:
+            pixel_error = ops.square(abs_error)
+        else:
+            pixel_error = ops.power(abs_error, p)
+        rfr_loss = ops.sum(pixel_error / ops.power(t, p) * img_msks) / denominator
+        return self.cfg.loss.rfr.weight * rfr_loss
+
+    def _update_metrics(self, target_imgs, preds, img_msks, t=None):
+        target_imgs = tf.stop_gradient(target_imgs)
+        preds = tf.stop_gradient(preds)
+        img_msks = tf.stop_gradient(img_msks)
+        if t is not None:
+            t = tf.stop_gradient(t)
+
         denominator = self.masked_denominator(img_msks, target_imgs)
         abs_error = ops.abs(target_imgs - preds)
         sq_error = ops.square(target_imgs - preds)
