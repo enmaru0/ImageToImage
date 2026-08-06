@@ -127,6 +127,15 @@ def read_cfg_and_parse_arg():
     assert cfg.model.num_channel == 1, (
         "現在のI2I-RFR実装は1チャンネル出力を想定しています"
     )
+    if cfg.model.unet.downsample_type not in ["max_pool", "stride_conv"]:
+        raise ValueError(
+            "model.unet.downsample_typeはmax_poolまたはstride_convを指定してください"
+        )
+    if cfg.model.unet.upsample_type not in ["transpose_conv", "resize_conv"]:
+        raise ValueError(
+            "model.unet.upsample_typeはtranspose_convまたはresize_convを"
+            "指定してください"
+        )
     if training_mode == "self_supervised_deblur":
         sigma_range = list(cfg.self_supervised_deblur.sigma_range)
         if (

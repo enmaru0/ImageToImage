@@ -46,33 +46,79 @@ def conv_block(
     return x
 
 
-def encode_pool(img, img_msk, pool_size_zyx: tuple[int, int, int]):
+def encode_downsample(
+    img,
+    img_msk,
+    name: str,
+    downsample_type: str,
+    pool_size_zyx: tuple[int, int, int],
+    down_kernel_size_zyx: tuple[int, int, int],
+):
     pool_size_zyx = _to_tuple3(pool_size_zyx)
-    img_pooled = layers.MaxPooling3D(
-        pool_size=pool_size_zyx, strides=pool_size_zyx, padding="same"
-    )(img)
-    msk_pooled = layers.MaxPooling3D(
-        pool_size=pool_size_zyx, strides=pool_size_zyx, padding="same"
+    msk_downsampled = layers.MaxPooling3D(
+        pool_size=pool_size_zyx,
+        strides=pool_size_zyx,
+        padding="same",
+        name=f"{name}_mask_pool",
     )(img_msk)
-    return img_pooled, msk_pooled
+
+    if downsample_type == "max_pool":
+        img_downsampled = layers.MaxPooling3D(
+            pool_size=pool_size_zyx,
+            strides=pool_size_zyx,
+            padding="same",
+            name=f"{name}_pool",
+        )(img)
+    elif downsample_type == "stride_conv":
+        # チャンネル数を維持し、純粋にdownsampling演算だけを比較可能にする。
+        img_downsampled = layers.Conv3D(
+            filters=int(img.shape[-1]),
+            kernel_size=_to_tuple3(down_kernel_size_zyx),
+            strides=pool_size_zyx,
+            padding="same",
+            use_bias=True,
+            kernel_initializer="he_uniform",
+            name=f"{name}_strideconv",
+        )(img)
+        img_downsampled = img_downsampled * msk_downsampled
+    else:
+        raise ValueError(f"Unsupported downsample_type: {downsample_type}")
+
+    return img_downsampled, msk_downsampled
 
 
 def decode_up(
     img,
     filters: int,
     name: str,
+    upsample_type: str,
     up_kernel_size_zyx: tuple[int, int, int],
     up_strides_zyx: tuple[int, int, int],
+    resize_conv_kernel_size_zyx: tuple[int, int, int],
 ):
-    return layers.Conv3DTranspose(
-        filters=filters,
-        kernel_size=_to_tuple3(up_kernel_size_zyx),
-        strides=_to_tuple3(up_strides_zyx),
-        padding="same",
-        name=name,
-        kernel_initializer="he_uniform",
-        use_bias=True,
-    )(img)
+    if upsample_type == "transpose_conv":
+        return layers.Conv3DTranspose(
+            filters=filters,
+            kernel_size=_to_tuple3(up_kernel_size_zyx),
+            strides=_to_tuple3(up_strides_zyx),
+            padding="same",
+            name=name,
+            kernel_initializer="he_uniform",
+            use_bias=True,
+        )(img)
+    if upsample_type == "resize_conv":
+        resize_name = name.replace("transposeconv", "resize")
+        conv_name = name.replace("transposeconv", "resizeconv")
+        x = layers.UpSampling3D(size=_to_tuple3(up_strides_zyx), name=resize_name)(img)
+        return layers.Conv3D(
+            filters=filters,
+            kernel_size=_to_tuple3(resize_conv_kernel_size_zyx),
+            padding="same",
+            name=conv_name,
+            kernel_initializer="he_uniform",
+            use_bias=True,
+        )(x)
+    raise ValueError(f"Unsupported upsample_type: {upsample_type}")
 
 
 def decoder_last(
@@ -87,18 +133,20 @@ def decoder_last(
     z_conv_kernel_size_zyx: tuple[int, int, int] | None,
     z_conv_interval: int,
     block_index: int,
+    upsample_type: str,
     up_kernel_size_zyx: tuple[int, int, int],
     up_strides_zyx: tuple[int, int, int],
+    resize_conv_kernel_size_zyx: tuple[int, int, int],
 ):
-    x = layers.Conv3DTranspose(
-        filters=filters,
-        kernel_size=_to_tuple3(up_kernel_size_zyx),
-        strides=_to_tuple3(up_strides_zyx),
-        padding="same",
-        name="dec0_transposeconv0",
-        kernel_initializer="he_uniform",
-        use_bias=True,
-    )(img)
+    x = decode_up(
+        img,
+        filters,
+        "dec0_transposeconv0",
+        upsample_type,
+        up_kernel_size_zyx,
+        up_strides_zyx,
+        resize_conv_kernel_size_zyx,
+    )
     x = layers.Concatenate()([x, skip_tensor])
 
     for e in range(num_decode_blocks - 1):
@@ -108,9 +156,7 @@ def decoder_last(
             z_conv_kernel_size_zyx,
             z_conv_interval,
         )
-        x = conv_block(
-            x, img_msk, filters, f"dec0_conv{e}", renorm, kernel_size
-        )
+        x = conv_block(x, img_msk, filters, f"dec0_conv{e}", renorm, kernel_size)
 
     x = layers.Conv3D(
         filters=num_channel,
@@ -134,11 +180,20 @@ def build_unet(
     conv_kernel_size_zyx: tuple[int, int, int] = (3, 3, 3),
     z_conv_kernel_size_zyx: tuple[int, int, int] | None = None,
     z_conv_interval: int = 0,
+    downsample_type: str = "max_pool",
     pool_size_zyx: tuple[int, int, int] = (2, 2, 2),
+    down_kernel_size_zyx: tuple[int, int, int] = (3, 3, 3),
+    upsample_type: str = "transpose_conv",
     up_kernel_size_zyx: tuple[int, int, int] = (4, 4, 4),
     up_strides_zyx: tuple[int, int, int] = (2, 2, 2),
+    resize_conv_kernel_size_zyx: tuple[int, int, int] = (3, 3, 3),
     **renorm: dict,
 ) -> Model:
+    if downsample_type not in ["max_pool", "stride_conv"]:
+        raise ValueError(f"Unsupported downsample_type: {downsample_type}")
+    if upsample_type not in ["transpose_conv", "resize_conv"]:
+        raise ValueError(f"Unsupported upsample_type: {upsample_type}")
+
     input_img = Input(shape=input_shape, name="image")
     input_img_msk = Input(shape=input_shape[:3] + (1,), name="mask")
 
@@ -157,15 +212,17 @@ def build_unet(
                 z_conv_interval,
             )
             x = conv_block(
-                x,
-                img_msk,
-                start_ch << d,
-                f"enc{d}_conv{e}",
-                renorm,
-                kernel_size,
+                x, img_msk, start_ch << d, f"enc{d}_conv{e}", renorm, kernel_size
             )
             conv_block_index += 1
-        x_pooled, msk_pooled = encode_pool(x, img_msk, pool_size_zyx)
+        x_pooled, msk_pooled = encode_downsample(
+            x,
+            img_msk,
+            f"enc{d}_downsample",
+            downsample_type,
+            pool_size_zyx,
+            down_kernel_size_zyx,
+        )
         skips.append(x)
         skips_msk.append(msk_pooled)
         x, img_msk = x_pooled, msk_pooled
@@ -179,12 +236,7 @@ def build_unet(
             z_conv_interval,
         )
         x = conv_block(
-            x,
-            img_msk,
-            start_ch << depth,
-            f"bottom_conv{b}",
-            renorm,
-            kernel_size,
+            x, img_msk, start_ch << depth, f"bottom_conv{b}", renorm, kernel_size
         )
         conv_block_index += 1
 
@@ -198,8 +250,10 @@ def build_unet(
             x,
             start_ch << d,
             f"dec{d}_transposeconv0",
+            upsample_type,
             up_kernel_size_zyx,
             up_strides_zyx,
+            resize_conv_kernel_size_zyx,
         )
         x = layers.Concatenate()([x, _skip_x])
         for e in range(num_decode_blocks):
@@ -210,12 +264,7 @@ def build_unet(
                 z_conv_interval,
             )
             x = conv_block(
-                x,
-                _skip_msk,
-                start_ch << d,
-                f"dec{d}_conv{e}",
-                renorm,
-                kernel_size,
+                x, _skip_msk, start_ch << d, f"dec{d}_conv{e}", renorm, kernel_size
             )
             conv_block_index += 1
 
@@ -234,8 +283,10 @@ def build_unet(
         z_conv_kernel_size_zyx,
         z_conv_interval,
         conv_block_index,
+        upsample_type,
         up_kernel_size_zyx,
         up_strides_zyx,
+        resize_conv_kernel_size_zyx,
     )
 
     return CustomModel(inputs=[input_img, input_img_msk], outputs=outputs)

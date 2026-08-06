@@ -37,9 +37,13 @@ model:
     # z_conv_interval回に1回だけZ方向も畳み込む
     z_conv_kernel_size_zyx: [3,3,3]
     z_conv_interval: 3 # 0にするとZ方向の間引き畳み込みを無効化
+    downsample_type: max_pool # max_pool or stride_conv
     pool_size_zyx: [1,2,2] # Z方向をdownsampleしない
+    down_kernel_size_zyx: [1,3,3] # stride_conv用
+    upsample_type: transpose_conv # transpose_conv or resize_conv
     up_kernel_size_zyx: [1,4,4]
     up_strides_zyx: [1,2,2]
+    resize_conv_kernel_size_zyx: [1,3,3] # resize_conv用
   # 通常のbatch normを使う場合はr_maxを1、d_maxを0としてください
   renorm:
     r_max: 3.0 # 1 for batch norm

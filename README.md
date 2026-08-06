@@ -51,6 +51,8 @@ datasets_images/
 
 `val` が無い場合は、`train` の画像をvalidationにも使用します。`debug_dataloader.py` の `source` 出力には合成blur後の画像、`target` 出力には元画像が保存されるため、学習前にblur強度を確認できます。
 
+自己教師ありモードでは、正規化、gamma、sharpness、noiseなど既存の信号augmentationをsource/targetで共有します。共有augmentation後の画像をclean targetとしてコピーし、sourceにだけdeblur学習用のGaussian blurを追加するため、学習ペアの差分はこのblurだけになります。
+
 なお、この方式は「元画像よりさらにぼかした画像 → 元画像」という再劣化ペアを作る自己教師あり学習です。入力画像自体に強いblurが含まれている場合、その完全にsharpな正解画像を直接与える方式ではありません。
 
 ## ペア画像のデータ配置
@@ -145,12 +147,31 @@ model:
     conv_kernel_size_zyx: [1,3,3]
     z_conv_kernel_size_zyx: [3,3,3]
     z_conv_interval: 3
+    downsample_type: max_pool
     pool_size_zyx: [1,2,2]
+    down_kernel_size_zyx: [1,3,3]
+    upsample_type: transpose_conv
     up_kernel_size_zyx: [1,4,4]
     up_strides_zyx: [1,2,2]
+    resize_conv_kernel_size_zyx: [1,3,3]
 ```
 
 `z_conv_interval: 3` は「3個に1個のConv blockでZ方向も畳み込む」という意味です。`0` にするとZ方向の間引き畳み込みを無効化します。
+
+downsampling/upsamplingは独立に切り替えられます。従来構成は
+`max_pool + transpose_conv`です。Stride Convとresize-convolutionを比較する場合は
+次のように指定します。`resize_conv`は`UpSampling3D`によるnearest-neighbor resize後に
+Conv3Dを適用します。
+
+```bash
+python main.py --overrides \
+  model.unet.downsample_type=stride_conv \
+  model.unet.upsample_type=resize_conv
+```
+
+`stride_conv`は`pool_size_zyx`をstrideとして使用し、入力channel数を維持します。
+kernelは`down_kernel_size_zyx`で指定します。`resize_conv`は
+`up_strides_zyx`で拡大し、`resize_conv_kernel_size_zyx`のConv3Dを適用します。
 
 ## I2I-RFR
 

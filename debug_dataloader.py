@@ -78,18 +78,19 @@ if __name__ == "__main__":
 
             # GPUの処理を実行
             if is_training:
-                batch["imgs"] = CustomModel.gpu_aug(
-                    batch["imgs"],
-                    CustomModel._get_img_msks(batch["msks"], cfg.bit_info.padding_bit),
-                    batch["min_clip_vals"],
-                    batch["max_clip_vals"],
-                    cfg,
-                )
-                batch["imgs"] = CustomModel.apply_self_supervised_deblur(
-                    batch["imgs"],
-                    CustomModel._get_img_msks(batch["msks"], cfg.bit_info.padding_bit),
-                    cfg,
-                    is_training=True,
+                batch["imgs"], batch["target_imgs"] = (
+                    CustomModel.prepare_training_images(
+                        batch["imgs"],
+                        batch["target_imgs"],
+                        CustomModel._get_img_msks(
+                            batch["msks"], cfg.bit_info.padding_bit
+                        ),
+                        batch["min_clip_vals"],
+                        batch["max_clip_vals"],
+                        batch["target_min_clip_vals"],
+                        batch["target_max_clip_vals"],
+                        cfg,
+                    )
                 )
             else:
                 batch["imgs"] = normalize(
@@ -104,12 +105,12 @@ if __name__ == "__main__":
                     cfg,
                     is_training=False,
                 )
-            batch["target_imgs"] = CustomModel.normalize_target(
-                batch["target_imgs"],
-                CustomModel._get_img_msks(batch["msks"], cfg.bit_info.padding_bit),
-                batch["target_min_clip_vals"],
-                batch["target_max_clip_vals"],
-            )
+                batch["target_imgs"] = CustomModel.normalize_target(
+                    batch["target_imgs"],
+                    CustomModel._get_img_msks(batch["msks"], cfg.bit_info.padding_bit),
+                    batch["target_min_clip_vals"],
+                    batch["target_max_clip_vals"],
+                )
             # Numpyに変換
             batch = {k: v.numpy() for k, v in batch.items()}
 

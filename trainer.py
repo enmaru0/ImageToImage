@@ -88,12 +88,15 @@ class CustomModel(Model):
         target_min_clip_vals = data["target_min_clip_vals"]
         target_max_clip_vals = data["target_max_clip_vals"]
         # ここでGPUを使ったデータの正規化やデータ拡張を行う
-        imgs = self.gpu_aug(imgs, img_msks, min_clip_vals, max_clip_vals, self.cfg)
-        imgs = self.apply_self_supervised_deblur(
-            imgs, img_msks, self.cfg, is_training=True
-        )
-        target_imgs = self.normalize_target(
-            target_imgs, img_msks, target_min_clip_vals, target_max_clip_vals
+        imgs, target_imgs = self.prepare_training_images(
+            imgs,
+            target_imgs,
+            img_msks,
+            min_clip_vals,
+            max_clip_vals,
+            target_min_clip_vals,
+            target_max_clip_vals,
+            self.cfg,
         )
         with GradientTape() as tape:
             t = self.sample_rfr_time(target_imgs, self.cfg)
@@ -278,6 +281,33 @@ class CustomModel(Model):
         imgs = ops.clip(imgs, 0, 1)
         imgs = imgs * img_msks
         return imgs
+
+    @classmethod
+    def prepare_training_images(
+        cls,
+        imgs,
+        target_imgs,
+        img_msks,
+        min_clip_vals,
+        max_clip_vals,
+        target_min_clip_vals,
+        target_max_clip_vals,
+        cfg,
+    ):
+        """Prepare source/target while keeping self-supervised signals aligned."""
+        imgs = cls.gpu_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg)
+        training_mode = str(getattr(cfg, "training_mode", "paired"))
+        if training_mode == "self_supervised_deblur":
+            # sourceとtargetで信号変換を完全に共有し、この後のblurだけを差分にする。
+            target_imgs = tf.identity(imgs)
+            imgs = cls.apply_self_supervised_deblur(
+                imgs, img_msks, cfg, is_training=True
+            )
+        else:
+            target_imgs = cls.normalize_target(
+                target_imgs, img_msks, target_min_clip_vals, target_max_clip_vals
+            )
+        return imgs, target_imgs
 
     @staticmethod
     def apply_self_supervised_deblur(imgs, img_msks, cfg, is_training):
