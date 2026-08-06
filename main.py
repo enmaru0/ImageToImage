@@ -30,6 +30,11 @@ def _to_config_path(path_list):
     return [str(path) for path in path_list]
 
 
+def get_training_mode(cfg):
+    """Return the data pairing mode, including compatibility with old configs."""
+    return str(getattr(cfg, "training_mode", "paired"))
+
+
 def read_cfg_and_parse_arg():
     # コマンドライン引数と設定ファイルを読み込む関数
     parser = argparse.ArgumentParser()
@@ -54,12 +59,23 @@ def read_cfg_and_parse_arg():
 
     # ディレクトリを Path 型に変換
     cfg.exp_dir = Path(cfg.exp_dir)
-    source_data_dirs = _to_path_list(cfg.source_data_dir)
-    target_data_dirs = _to_path_list(cfg.target_data_dir)
-    if len(source_data_dirs) != len(target_data_dirs):
+    training_mode = get_training_mode(cfg)
+    if training_mode not in ["paired", "self_supervised_deblur"]:
         raise ValueError(
-            "source_data_dirとtarget_data_dirは同じ数だけ指定してください"
+            "training_modeは'paired'または'self_supervised_deblur'を"
+            f"指定してください: {training_mode}"
         )
+
+    source_data_dirs = _to_path_list(cfg.source_data_dir)
+    if training_mode == "paired":
+        target_data_dirs = _to_path_list(cfg.target_data_dir)
+        if len(source_data_dirs) != len(target_data_dirs):
+            raise ValueError(
+                "source_data_dirとtarget_data_dirは同じ数だけ指定してください"
+            )
+    else:
+        # 単一画像集合をclean targetとして再利用する。source側にだけblurを加える。
+        target_data_dirs = source_data_dirs
     cfg.restore = Path(cfg.restore) if cfg.restore else None
     cfg.finetune = Path(cfg.finetune) if cfg.finetune else None
 
@@ -91,10 +107,14 @@ def read_cfg_and_parse_arg():
         target_rescaled_flags.append(target_rescaled_flag)
 
     cfg.source_data_dir = _to_config_path(source_rescaled_list)
-    cfg.target_data_dir = _to_config_path(target_rescaled_list)
-    if target_scale_zyx[0] > 5 and not all(
-        source_rescaled_flags + target_rescaled_flags
-    ):
+    if training_mode == "paired":
+        cfg.target_data_dir = _to_config_path(target_rescaled_list)
+        rescaled_flags = source_rescaled_flags + target_rescaled_flags
+    else:
+        # targetはsourceと同じファイルなので、出力設定にも解決済みパスを記録する。
+        cfg.target_data_dir = cfg.source_data_dir
+        rescaled_flags = source_rescaled_flags
+    if target_scale_zyx[0] > 5 and not all(rescaled_flags):
         raise ValueError(
             "Thickスライスで学習する場合は./utils/rescale_dataset.pyで予めリスケールすることを推奨します"
         )
@@ -107,6 +127,21 @@ def read_cfg_and_parse_arg():
     assert cfg.model.num_channel == 1, (
         "現在のI2I-RFR実装は1チャンネル出力を想定しています"
     )
+    if training_mode == "self_supervised_deblur":
+        sigma_range = list(cfg.self_supervised_deblur.sigma_range)
+        if (
+            len(sigma_range) != 2
+            or sigma_range[0] <= 0
+            or sigma_range[0] >= sigma_range[1]
+        ):
+            raise ValueError(
+                "self_supervised_deblur.sigma_rangeは0より大きい"
+                "min < maxの[min, max]で指定してください"
+            )
+        if cfg.self_supervised_deblur.validation_sigma <= 0:
+            raise ValueError(
+                "self_supervised_deblur.validation_sigmaは0より大きくしてください"
+            )
     return cfg
 
 
@@ -124,13 +159,21 @@ def _has_raw_files(data_dir):
     return data_dir.exists() and any(data_dir.glob("*.raw"))
 
 
-def prepare_data_dict(source_data_dir, target_data_dir):
+def prepare_data_dict(source_data_dir, target_data_dir=None, training_mode="paired"):
     source_data_dirs = _to_path_list(source_data_dir)
-    target_data_dirs = _to_path_list(target_data_dir)
-    if len(source_data_dirs) != len(target_data_dirs):
-        raise ValueError(
-            "source_data_dirとtarget_data_dirは同じ数だけ指定してください"
-        )
+    if training_mode == "paired":
+        if target_data_dir is None:
+            raise ValueError("pairedモードではtarget_data_dirが必要です")
+        target_data_dirs = _to_path_list(target_data_dir)
+        if len(source_data_dirs) != len(target_data_dirs):
+            raise ValueError(
+                "source_data_dirとtarget_data_dirは同じ数だけ指定してください"
+            )
+    elif training_mode == "self_supervised_deblur":
+        # 各画像を(source, clean target)として自己ペアリングする。
+        target_data_dirs = source_data_dirs
+    else:
+        raise ValueError(f"未対応のtraining_modeです: {training_mode}")
 
     def _make_split_dict(source_split_dir, target_split_dir, data_name):
         if not source_split_dir.exists():
@@ -147,13 +190,14 @@ def prepare_data_dict(source_data_dir, target_data_dir):
             target_hdr_path = target_raw_path.with_suffix(".hdr")
             if not source_hdr_path.exists():
                 skip_count += 1
-                logging.warning(f"source hdrがないためスキップします: {source_hdr_path}")
+                logging.warning(
+                    f"source hdrがないためスキップします: {source_hdr_path}"
+                )
                 continue
             if not target_raw_path.exists() or not target_hdr_path.exists():
                 skip_count += 1
                 logging.warning(
-                    "対応するtargetがないためスキップします: "
-                    f"{source_raw_path.name}"
+                    f"対応するtargetがないためスキップします: {source_raw_path.name}"
                 )
                 continue
             pair_list.append((source_hdr_path, target_hdr_path))
@@ -301,7 +345,9 @@ if __name__ == "__main__":
             },
     }
     """
-    train_dict, val_dict = prepare_data_dict(cfg.source_data_dir, cfg.target_data_dir)
+    train_dict, val_dict = prepare_data_dict(
+        cfg.source_data_dir, cfg.target_data_dir, training_mode=get_training_mode(cfg)
+    )
 
     # トレーニングおよび検証用のDataLoaderを作成
     train_loader = create_dataloader(train_dict, is_training=True, cfg=cfg)

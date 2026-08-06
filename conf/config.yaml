@@ -3,8 +3,10 @@
 # 上記のように--overrideの後に変更したい変数を書くことで設定を変更できる
 exp_dir: results/test
 
+# paired: source/targetの2ディレクトリ、self_supervised_deblur: sourceのみを使用
+training_mode: paired
 source_data_dir: datasets_source
-target_data_dir: datasets_target
+target_data_dir: datasets_target # self_supervised_deblurでは指定不要（sourceを再利用）
 num_train_steps: 100000
 eval_every: 1000
 num_workers: 4
@@ -101,6 +103,11 @@ aug:
     image: 0.0
   margin: 15 # mm 臓器内でクロップ範囲を決める際のマージン
   crop_keep_ratio: 0.3 # organ_cropのときにどれくらい元領域を残すか
+
+# 単一ディレクトリの画像をclean targetとし、入力側に合成blurを加える設定
+self_supervised_deblur:
+  sigma_range: [0.5,2.0] # 学習時に画像ごとに選ぶGaussian sigma（voxel単位）
+  validation_sigma: 1.25 # validation時は再現可能な固定sigmaを使う
 
 i2i_rfr:
   p: 1.0 # 論文デフォルト: L1

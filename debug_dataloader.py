@@ -5,7 +5,7 @@ from irg import save_raw, save_re4
 
 from data.dataloader import create_dataloader
 from data.gpu_aug import normalize
-from main import prepare_data_dict, read_cfg_and_parse_arg
+from main import get_training_mode, prepare_data_dict, read_cfg_and_parse_arg
 from trainer import CustomModel
 
 
@@ -55,7 +55,9 @@ if __name__ == "__main__":
     cfg = read_cfg_and_parse_arg()
     cfg.debug_dataloader = True
 
-    train_dict, val_dict = prepare_data_dict(cfg.source_data_dir, cfg.target_data_dir)
+    train_dict, val_dict = prepare_data_dict(
+        cfg.source_data_dir, cfg.target_data_dir, training_mode=get_training_mode(cfg)
+    )
 
     save_root = Path(cfg.exp_dir)
     save_root.mkdir(exist_ok=True, parents=True)
@@ -83,12 +85,24 @@ if __name__ == "__main__":
                     batch["max_clip_vals"],
                     cfg,
                 )
+                batch["imgs"] = CustomModel.apply_self_supervised_deblur(
+                    batch["imgs"],
+                    CustomModel._get_img_msks(batch["msks"], cfg.bit_info.padding_bit),
+                    cfg,
+                    is_training=True,
+                )
             else:
                 batch["imgs"] = normalize(
                     batch["imgs"], batch["min_clip_vals"], batch["max_clip_vals"]
                 )
                 batch["imgs"] *= CustomModel._get_img_msks(
                     batch["msks"], cfg.bit_info.padding_bit
+                )
+                batch["imgs"] = CustomModel.apply_self_supervised_deblur(
+                    batch["imgs"],
+                    CustomModel._get_img_msks(batch["msks"], cfg.bit_info.padding_bit),
+                    cfg,
+                    is_training=False,
                 )
             batch["target_imgs"] = CustomModel.normalize_target(
                 batch["target_imgs"],
@@ -124,9 +138,9 @@ if __name__ == "__main__":
                 batch["target_max_clip_vals"],
             )
 
-            msks = (
-                (batch["msks"] & (1 << cfg.bit_info.padding_bit)) == 0
-            ).astype(np.float32)
+            msks = ((batch["msks"] & (1 << cfg.bit_info.padding_bit)) == 0).astype(
+                np.float32
+            )
             bit_dict = {0: "img_msks"}
 
             save_msks(img_hdr_list, msks, save_dir, spacing_zyx, bit_dict)

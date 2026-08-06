@@ -8,7 +8,9 @@ from tensorflow import GradientTape
 from data.gpu_aug import (
     apply_random_gaussian_noise,
     apply_random_sharpness_or_gaussian_filter,
+    gaussian_filter,
     normalize,
+    random_gaussian_filter,
     random_gamma_correction,
     random_normalize,
 )
@@ -87,6 +89,9 @@ class CustomModel(Model):
         target_max_clip_vals = data["target_max_clip_vals"]
         # ここでGPUを使ったデータの正規化やデータ拡張を行う
         imgs = self.gpu_aug(imgs, img_msks, min_clip_vals, max_clip_vals, self.cfg)
+        imgs = self.apply_self_supervised_deblur(
+            imgs, img_msks, self.cfg, is_training=True
+        )
         target_imgs = self.normalize_target(
             target_imgs, img_msks, target_min_clip_vals, target_max_clip_vals
         )
@@ -114,7 +119,7 @@ class CustomModel(Model):
         ./callbacks/image_logger.pyを参考にコールバックを実装する
         """
 
-        logits = self.predict_step(data)
+        logits = self.predict_step(data, apply_self_supervised_blur=True)
 
         target_imgs = self.normalize_target(
             data["target_imgs"],
@@ -176,7 +181,7 @@ class CustomModel(Model):
 
         return total_loss
 
-    def predict_step(self, data, return_aux=False):
+    def predict_step(self, data, return_aux=False, apply_self_supervised_blur=False):
         imgs = data["imgs"]
         msks = data["msks"]
         img_msks = self._get_img_msks(msks, self.cfg.bit_info.padding_bit)
@@ -187,6 +192,10 @@ class CustomModel(Model):
         # 画像の正規化
         imgs = normalize(imgs, min_clip_vals, max_clip_vals)
         imgs = imgs * img_msks
+        if apply_self_supervised_blur:
+            imgs = self.apply_self_supervised_deblur(
+                imgs, img_msks, self.cfg, is_training=False
+            )
         preds = self.i2i_rfr_inference(imgs, img_msks)
 
         if return_aux:
@@ -269,6 +278,23 @@ class CustomModel(Model):
         imgs = ops.clip(imgs, 0, 1)
         imgs = imgs * img_msks
         return imgs
+
+    @staticmethod
+    def apply_self_supervised_deblur(imgs, img_msks, cfg, is_training):
+        """Synthesize a blurred source while leaving the target unchanged."""
+        training_mode = str(getattr(cfg, "training_mode", "paired"))
+        if training_mode != "self_supervised_deblur":
+            return imgs
+
+        if is_training:
+            imgs = random_gaussian_filter(
+                imgs, sigma_range=cfg.self_supervised_deblur.sigma_range
+            )
+        else:
+            imgs = gaussian_filter(
+                imgs, sigma=float(cfg.self_supervised_deblur.validation_sigma)
+            )
+        return imgs * img_msks
 
     def _get_metrics_result(self):
         """

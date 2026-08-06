@@ -111,9 +111,9 @@ def main():
     target_scale_zyx = np.array(cfg.aug.affine.norm_spacing_zyx)
     target_scale_zyx = target_scale_zyx.astype(np.float32)
 
-    data_roots = _to_path_list(cfg.source_data_dir) + _to_path_list(
-        cfg.target_data_dir
-    )
+    data_roots = _to_path_list(cfg.source_data_dir)
+    if str(getattr(cfg, "training_mode", "paired")) == "paired":
+        data_roots += _to_path_list(cfg.target_data_dir)
     for img_root in dict.fromkeys(data_roots):
         save_root = img_root.parent / (
             img_root.name + "_" + "_".join(map(str, target_scale_zyx))

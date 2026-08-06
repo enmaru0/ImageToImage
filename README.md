@@ -16,9 +16,44 @@ https://arxiv.org/abs/2603.20186
 - I2I-RFRにより、targetにノイズを混ぜた状態からtarget画像を復元する
 - 推論時は少数ステップのEuler更新で出力を生成する
 
-## データ配置
+## 単一ディレクトリでdeblurを学習する
 
-`conf/config.yaml` で2つのデータルートを指定します。
+`training_mode: self_supervised_deblur` を指定すると、`source_data_dir` の画像だけで学習できます。各画像をclean targetとして再利用し、入力側にだけランダムなGaussian blurを合成して、blur画像から元画像へ戻すdeblurを学習します。`target_data_dir`はこのモードでは使いません。
+
+```bash
+python main.py --overrides \
+  training_mode=self_supervised_deblur \
+  source_data_dir=datasets_images \
+  exp_dir=results/self_deblur
+```
+
+blurの強さはvoxel単位のsigmaで設定します。学習時は画像ごとに範囲内からランダムに選び、validation時は比較可能なように固定値を使います。
+
+```yaml
+self_supervised_deblur:
+  sigma_range: [0.5, 2.0]
+  validation_sigma: 1.25
+```
+
+データ配置は通常モードと同じで、直下に `.hdr/.raw` を置くか、`train` / `val` に分けます。
+
+```text
+datasets_images/
+  train/
+    case001.hdr
+    case001.raw
+  val/
+    case101.hdr
+    case101.raw
+```
+
+`val` が無い場合は、`train` の画像をvalidationにも使用します。`debug_dataloader.py` の `source` 出力には合成blur後の画像、`target` 出力には元画像が保存されるため、学習前にblur強度を確認できます。
+
+なお、この方式は「元画像よりさらにぼかした画像 → 元画像」という再劣化ペアを作る自己教師あり学習です。入力画像自体に強いblurが含まれている場合、その完全にsharpな正解画像を直接与える方式ではありません。
+
+## ペア画像のデータ配置
+
+通常の `training_mode: paired` では、`conf/config.yaml` で2つのデータルートを指定します。
 
 ```yaml
 source_data_dir: datasets_source

@@ -11,7 +11,7 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from data.dataloader import create_dataloader
-from main import gpu_setting, prepare_data_dict
+from main import get_training_mode, gpu_setting, prepare_data_dict
 from trainer import CustomModel
 
 tf.config.run_functions_eagerly(True)
@@ -64,14 +64,10 @@ if __name__ == "__main__":
     )
     clip_group = parser.add_mutually_exclusive_group()
     clip_group.add_argument(
-        "--clip-output",
-        action="store_true",
-        help="推論出力を0-1にclipする",
+        "--clip-output", action="store_true", help="推論出力を0-1にclipする"
     )
     clip_group.add_argument(
-        "--no-clip-output",
-        action="store_true",
-        help="推論出力の0-1 clipを無効化する",
+        "--no-clip-output", action="store_true", help="推論出力の0-1 clipを無効化する"
     )
     parser.add_argument(
         "--num-workers",
@@ -118,7 +114,9 @@ if __name__ == "__main__":
     gpu_setting(args.gpu, cfg.gpu_allow_growth)
 
     # データを準備
-    val_dict = prepare_data_dict(cfg.source_data_dir, cfg.target_data_dir)[1]
+    val_dict = prepare_data_dict(
+        cfg.source_data_dir, cfg.target_data_dir, training_mode=get_training_mode(cfg)
+    )[1]
     test_loader = create_dataloader(val_dict, is_training=False, cfg=cfg)
 
     # モデルを読み込む

@@ -10,7 +10,9 @@ class ImageLogger(keras.callbacks.Callback):
         self.first_log = True
 
         def predict_step(data):
-            return self.model.predict_step(data, return_aux=True)
+            return self.model.predict_step(
+                data, return_aux=True, apply_self_supervised_blur=True
+            )
 
         self.one_step = tf.function(
             predict_step, reduce_retracing=True, jit_compile=jit_compile
