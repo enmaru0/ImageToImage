@@ -4,6 +4,30 @@ from keras.src import ops
 from .layers import BatchRenormalization
 
 
+_DOWNSAMPLE_TYPE_ALIASES = {
+    "maxpool": "max_pool",
+    "maxpooling": "max_pool",
+    "pooling": "max_pool",
+    "strideconv": "stride_conv",
+    "stridedconv": "stride_conv",
+}
+_UPSAMPLE_TYPE_ALIASES = {
+    "transposeconv": "transpose_conv",
+    "transposedconv": "transpose_conv",
+    "transposeupconv": "transpose_conv",
+    "resizeconv": "resize_conv",
+    "resizeupconv": "resize_conv",
+}
+
+
+def _canonicalize_type(value, aliases, option_name):
+    key = str(value).lower().replace("_", "").replace("-", "")
+    if key not in aliases:
+        choices = sorted(set(aliases.values()))
+        raise ValueError(f"Unsupported {option_name}: {value}. Choose from {choices}")
+    return aliases[key]
+
+
 def _to_tuple3(value):
     return tuple(int(v) for v in value)
 
@@ -181,18 +205,43 @@ def build_unet(
     z_conv_kernel_size_zyx: tuple[int, int, int] | None = None,
     z_conv_interval: int = 0,
     downsample_type: str = "max_pool",
+    conv_type: str | None = None,
     pool_size_zyx: tuple[int, int, int] = (2, 2, 2),
     down_kernel_size_zyx: tuple[int, int, int] = (3, 3, 3),
     upsample_type: str = "transpose_conv",
+    up_type: str | None = None,
     up_kernel_size_zyx: tuple[int, int, int] = (4, 4, 4),
     up_strides_zyx: tuple[int, int, int] = (2, 2, 2),
     resize_conv_kernel_size_zyx: tuple[int, int, int] = (3, 3, 3),
     **renorm: dict,
 ) -> Model:
-    if downsample_type not in ["max_pool", "stride_conv"]:
-        raise ValueError(f"Unsupported downsample_type: {downsample_type}")
-    if upsample_type not in ["transpose_conv", "resize_conv"]:
-        raise ValueError(f"Unsupported upsample_type: {upsample_type}")
+    if conv_type is not None:
+        downsample_type = conv_type
+    if up_type is not None:
+        upsample_type = up_type
+    downsample_type = _canonicalize_type(
+        downsample_type, _DOWNSAMPLE_TYPE_ALIASES, "downsample_type/conv_type"
+    )
+    upsample_type = _canonicalize_type(
+        upsample_type, _UPSAMPLE_TYPE_ALIASES, "upsample_type/up_type"
+    )
+
+    allowed_renorm_keys = {
+        "r_max",
+        "d_max",
+        "warmup_steps",
+        "change_d_steps",
+        "change_r_steps",
+        "momentum",
+        "epsilon",
+        "center",
+        "scale",
+        "dtype",
+        "trainable",
+    }
+    unexpected_args = sorted(set(renorm) - allowed_renorm_keys)
+    if unexpected_args:
+        raise TypeError(f"Unrecognized U-Net arguments: {unexpected_args}")
 
     input_img = Input(shape=input_shape, name="image")
     input_img_msk = Input(shape=input_shape[:3] + (1,), name="mask")

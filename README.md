@@ -173,6 +173,17 @@ python main.py --overrides \
 kernelは`down_kernel_size_zyx`で指定します。`resize_conv`は
 `up_strides_zyx`で拡大し、`resize_conv_kernel_size_zyx`のConv3Dを適用します。
 
+従来の実験スクリプトとの互換性のため、次の別名も使用できます。
+
+```bash
+python main.py --overrides \
+  model.unet.conv_type=StridedConv \
+  model.unet.up_type=ResizeUpConv
+```
+
+この場合はそれぞれ`downsample_type=stride_conv`、
+`upsample_type=resize_conv`として扱われます。
+
 ## I2I-RFR
 
 学習時は、target画像 `y` とノイズ `eps` から以下の状態を作ります。
