@@ -35,16 +35,18 @@ self_supervised_deblur:
   validation_sigma: 1.25
 ```
 
-データ配置は通常モードと同じで、直下に `.hdr/.raw` を置くか、`train` / `val` に分けます。
+データ配置は、ルート直下に `.hdr/.raw` を置くか、`train` / `val` に分けます。自己教師ありモードでは各ディレクトリ以下を再帰探索するため、spacingなどでさらにサブフォルダへ分けても利用できます。
 
 ```text
 datasets_images/
   train/
-    case001.hdr
-    case001.raw
+    mri_2.0_2.0_2.0/
+      case001.hdr
+      case001.raw
   val/
-    case101.hdr
-    case101.raw
+    mri_2.0_2.0_2.0/
+      case101.hdr
+      case101.raw
 ```
 
 `val` が無い場合は、`train` の画像をvalidationにも使用します。`debug_dataloader.py` の `source` 出力には合成blur後の画像、`target` 出力には元画像が保存されるため、学習前にblur強度を確認できます。
@@ -122,7 +124,7 @@ datasets_target/
     case101.raw
 ```
 
-サブフォルダは再帰的に探索しません。sourceとtargetの画像サイズ・spacingは一致している必要があります。
+pairedモードではサブフォルダを再帰探索しません。sourceとtargetの画像サイズ・spacingは一致している必要があります。
 
 ## 現在の標準設定
 

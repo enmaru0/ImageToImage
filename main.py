@@ -155,12 +155,16 @@ def gpu_setting(gpu_str: str, gpu_allow_growth: bool) -> None:
     os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = str(gpu_allow_growth).lower()
 
 
-def _has_raw_files(data_dir):
-    return data_dir.exists() and any(data_dir.glob("*.raw"))
+def _has_raw_files(data_dir, recursive=False):
+    if not data_dir.exists():
+        return False
+    raw_paths = data_dir.rglob("*.raw") if recursive else data_dir.glob("*.raw")
+    return any(raw_paths)
 
 
 def prepare_data_dict(source_data_dir, target_data_dir=None, training_mode="paired"):
     source_data_dirs = _to_path_list(source_data_dir)
+    is_self_supervised = training_mode == "self_supervised_deblur"
     if training_mode == "paired":
         if target_data_dir is None:
             raise ValueError("pairedモードではtarget_data_dirが必要です")
@@ -184,9 +188,16 @@ def prepare_data_dict(source_data_dir, target_data_dir=None, training_mode="pair
         split_dict = defaultdict(dict)
         pair_list = []
         skip_count = 0
-        for source_raw_path in sorted(source_split_dir.glob("*.raw")):
+        if is_self_supervised:
+            source_raw_paths = source_split_dir.rglob("*.raw")
+        else:
+            source_raw_paths = source_split_dir.glob("*.raw")
+        for source_raw_path in sorted(source_raw_paths):
             source_hdr_path = source_raw_path.with_suffix(".hdr")
-            target_raw_path = target_split_dir / source_raw_path.name
+            if is_self_supervised:
+                target_raw_path = source_raw_path
+            else:
+                target_raw_path = target_split_dir / source_raw_path.name
             target_hdr_path = target_raw_path.with_suffix(".hdr")
             if not source_hdr_path.exists():
                 skip_count += 1
@@ -202,6 +213,11 @@ def prepare_data_dict(source_data_dir, target_data_dir=None, training_mode="pair
                 continue
             pair_list.append((source_hdr_path, target_hdr_path))
         if len(pair_list) == 0:
+            if is_self_supervised:
+                raise FileNotFoundError(
+                    f"{source_split_dir} 以下に使用可能な画像が見つかりません。"
+                    "同じ場所に同じbasenameの.rawと.hdrを置いてください"
+                )
             raise FileNotFoundError(
                 f"{source_split_dir} 直下に使用可能なペア画像が見つかりません"
             )
@@ -247,10 +263,14 @@ def prepare_data_dict(source_data_dir, target_data_dir=None, training_mode="pair
                     target_train_dir,
                     f"{source_data_dir.name}_train_as_val",
                 )
-        elif _has_raw_files(source_data_dir) and _has_raw_files(target_data_dir):
+        elif _has_raw_files(
+            source_data_dir, recursive=is_self_supervised
+        ) and _has_raw_files(target_data_dir, recursive=is_self_supervised):
+            search_scope = "以下" if is_self_supervised else "直下"
             logging.warning(
                 f"{source_data_dir} にtrain/valフォルダが見つからないため、"
-                "指定フォルダ直下の画像をtrain/validationの両方に使用します"
+                f"指定フォルダ{search_scope}の画像を"
+                "train/validationの両方に使用します"
             )
             train_part = _make_split_dict(
                 source_data_dir, target_data_dir, source_data_dir.name
@@ -259,6 +279,11 @@ def prepare_data_dict(source_data_dir, target_data_dir=None, training_mode="pair
                 source_data_dir, target_data_dir, f"{source_data_dir.name}_as_val"
             )
         else:
+            if is_self_supervised:
+                raise FileNotFoundError(
+                    f"{source_data_dir} 以下、またはtrainフォルダ以下に"
+                    ".rawファイルが見つかりません"
+                )
             raise FileNotFoundError(
                 f"{source_data_dir} と {target_data_dir} の直下、"
                 "またはtrainフォルダ内に.rawファイルが見つかりません"
