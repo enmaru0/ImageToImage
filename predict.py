@@ -2,7 +2,6 @@ import argparse
 import gc
 from pathlib import Path
 
-import keras
 import numpy as np
 import tensorflow as tf
 from absl import logging
@@ -12,15 +11,35 @@ from tqdm import tqdm
 
 from data.dataloader import create_dataloader
 from main import get_training_mode, gpu_setting, prepare_data_dict
+from models import build_unet
 from trainer import CustomModel
 
-tf.config.run_functions_eagerly(True)
+
+def load_checkpoint(checkpoint_path, cfg) -> CustomModel:
+    # 保存済みモデル全体を復元すると、推論には不要なoptimizerとslot変数も
+    # メモリに載る。output.yamlからネットワークだけを構築し、重みだけを読む。
+    input_shape = tuple(cfg.aug.crop_size_zyx) + (
+        cfg.model.input_num_channel + cfg.model.num_channel,
+    )
+    model = build_unet(
+        CustomModel,
+        input_shape,
+        cfg.model.num_channel,
+        **cfg.model.unet,
+        **cfg.model.renorm,
+    )
+    model.load_weights(checkpoint_path)
+    return model
 
 
-def load_checkpoint(checkpoint_path) -> tuple[CustomModel, int]:
-    model = keras.models.load_model(checkpoint_path, safe_mode=False)
-    step = model.optimizer.iterations.numpy()
-    return model, step
+def enable_gpu_memory_growth():
+    """Avoid reserving nearly all GPU memory before the first inference."""
+    for device in tf.config.list_physical_devices("GPU"):
+        try:
+            tf.config.experimental.set_memory_growth(device, True)
+        except RuntimeError as error:
+            # TensorFlowがすでにdeviceを初期化していた場合も推論は継続する。
+            logging.warning(f"Could not enable memory growth for {device}: {error}")
 
 
 def reverse_normalize_img(img, min_val, max_val):
@@ -50,6 +69,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("checkpoint_path", type=Path)
     parser.add_argument("--gpu", default="0", type=str, help="gpu num (default 0)")
+    parser.add_argument(
+        "--no-gpu-allow-growth",
+        action="store_false",
+        dest="gpu_allow_growth",
+        default=True,
+        help="GPUメモリの段階確保を無効化する（推論時は既定で有効）",
+    )
     parser.add_argument(
         "--inference-steps",
         type=int,
@@ -82,6 +108,14 @@ if __name__ == "__main__":
         help="推論データローダのprefetch数。OOM時は1を推奨",
     )
     parser.add_argument(
+        "--crop-size-zyx",
+        type=int,
+        nargs=3,
+        metavar=("Z", "Y", "X"),
+        default=None,
+        help="推論時のcropサイズを上書きする。GPU OOM時は小さくする",
+    )
+    parser.add_argument(
         "--no-save-comparison",
         action="store_true",
         help="input/output/target結合画像を保存しない",
@@ -97,6 +131,19 @@ if __name__ == "__main__":
     cfg.num_workers = args.num_workers
     cfg.prefetch_size = args.prefetch_size
     cfg.debug_dataloader = True
+    if args.crop_size_zyx is not None:
+        if any(size <= 0 for size in args.crop_size_zyx):
+            parser.error("--crop-size-zyxには正の整数を指定してください")
+        cfg.aug.crop_size_zyx = list(args.crop_size_zyx)
+        downsample_factor = np.power(
+            np.asarray(cfg.model.unet.pool_size_zyx, dtype=np.int64),
+            int(cfg.model.unet.depth),
+        )
+        if np.any(np.asarray(args.crop_size_zyx) % downsample_factor):
+            parser.error(
+                "--crop-size-zyxはUNetのdownsample倍率 "
+                f"{downsample_factor.tolist()} で割り切れる値にしてください"
+            )
     if args.inference_steps is not None:
         cfg.i2i_rfr.inference_steps = args.inference_steps
     if args.t_min is not None:
@@ -111,7 +158,9 @@ if __name__ == "__main__":
     save_dir.mkdir(exist_ok=True)
 
     # テスト時に使うGPUを設定
-    gpu_setting(args.gpu, cfg.gpu_allow_growth)
+    gpu_setting(args.gpu, args.gpu_allow_growth)
+    if args.gpu_allow_growth:
+        enable_gpu_memory_growth()
 
     # データを準備
     val_dict = prepare_data_dict(
@@ -120,9 +169,9 @@ if __name__ == "__main__":
     test_loader = create_dataloader(val_dict, is_training=False, cfg=cfg)
 
     # モデルを読み込む
-    model, step = load_checkpoint(checkpoint_path)
+    model = load_checkpoint(checkpoint_path, cfg)
     model.cfg = cfg
-    logging.info(f"Loaded from: {checkpoint_path} (step: {step})")
+    logging.info(f"Loaded from: {checkpoint_path} (optimizer state skipped)")
 
     spacing_zyx = np.array(cfg.aug.affine.norm_spacing_zyx, np.float32)
     for data in tqdm(test_loader):

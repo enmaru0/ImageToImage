@@ -254,8 +254,9 @@ python predict.py results/exp_0001/checkpoints/model_latest.keras \
   --clip-output
 ```
 
-GPUメモリに空きがあるのにOOMが出る場合は、CPU側のデータローダや
-比較画像作成が原因のことがあります。まず次の設定で確認してください。
+`predict.py` は推論時に不要なoptimizer状態をロードせず、GPUメモリを
+段階的に確保します。それでも `ResourceExhaustedError` が出る場合は、まず
+データローダと比較画像のメモリを抑えて確認してください。
 
 ```bash
 python predict.py results/exp_0001/checkpoints/model_latest.keras \
@@ -263,6 +264,23 @@ python predict.py results/exp_0001/checkpoints/model_latest.keras \
   --prefetch-size 1 \
   --no-save-comparison
 ```
+
+GPU OOMの場合はcropのY/Xを小さくすると、特徴マップのメモリ使用量を
+大きく削減できます。サイズはUNetのdownsample倍率で割り切れる値を推奨します。
+例えば学習時の `[8,192,192]` を次のように縮小できます。
+
+```bash
+python predict.py results/exp_0001/checkpoints/model_latest.keras \
+  --crop-size-zyx 8 128 128
+```
+
+GPU自体の空き容量が不足している場合は、CPU推論でも切り分けできます。
+
+```bash
+python predict.py results/exp_0001/checkpoints/model_latest.keras --gpu -1
+```
+
+cropを小さくすると出力される視野も小さくなる点に注意してください。
 
 出力は以下に保存されます。
 
