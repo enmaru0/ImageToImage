@@ -185,7 +185,13 @@ class CustomModel(Model):
 
         return total_loss
 
-    def predict_step(self, data, return_aux=False, apply_self_supervised_blur=False):
+    def predict_step(
+        self,
+        data,
+        return_aux=False,
+        apply_self_supervised_blur=False,
+        initial_noise=None,
+    ):
         imgs = data["imgs"]
         msks = data["msks"]
         img_msks = self._get_img_msks(msks, self.cfg.bit_info.padding_bit)
@@ -200,7 +206,7 @@ class CustomModel(Model):
             imgs = self.apply_self_supervised_deblur(
                 imgs, img_msks, self.cfg, is_training=False
             )
-        preds = self.i2i_rfr_inference(imgs, img_msks)
+        preds = self.i2i_rfr_inference(imgs, img_msks, initial_noise=initial_noise)
 
         if return_aux:
             target_imgs = self.normalize_target(
@@ -238,13 +244,17 @@ class CustomModel(Model):
         t_min = tf.cast(cfg.i2i_rfr.t_min, target_imgs.dtype)
         return tf.maximum(t, t_min)
 
-    def i2i_rfr_inference(self, imgs, img_msks):
+    def i2i_rfr_inference(self, imgs, img_msks, initial_noise=None):
         steps = int(self.cfg.i2i_rfr.inference_steps)
         dt = tf.cast(1.0 / steps, imgs.dtype)
         target_shape = tf.concat(
             [tf.shape(imgs)[:-1], tf.constant([self.cfg.model.num_channel])], axis=0
         )
-        target_state = tf.random.normal(target_shape, dtype=imgs.dtype)
+        if initial_noise is None:
+            target_state = tf.random.normal(target_shape, dtype=imgs.dtype)
+        else:
+            target_state = tf.cast(initial_noise, imgs.dtype)
+            tf.debugging.assert_equal(tf.shape(target_state), target_shape)
 
         for n in range(steps):
             t = tf.cast(1.0 - n / steps, imgs.dtype)

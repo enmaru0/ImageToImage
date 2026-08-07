@@ -263,6 +263,18 @@ f([x; y_t]) -> y
 python debug_dataloader.py
 ```
 
+source、target、およびX方向に `source | target` を並べたcomparisonが
+それぞれ次へ保存されます。comparisonの間には4 voxelの区切りが入ります。
+
+```text
+results/exp_0001/sample_train/source/
+results/exp_0001/sample_train/target/
+results/exp_0001/sample_train/comparison/
+results/exp_0001/sample_val/source/
+results/exp_0001/sample_val/target/
+results/exp_0001/sample_val/comparison/
+```
+
 学習を開始します。
 
 ```bash
@@ -311,7 +323,39 @@ python predict.py results/exp_0001/checkpoints/model_latest.keras \
   --source-data-dir /path/to/images
 ```
 
-pairedモデルではsourceとtargetを両方指定してください。
+### 入力画像全体のsliding-window推論
+
+`--sliding-window` を指定すると、対象フォルダ以下の各volume全体を推論します。
+window間は中央重み付きで加重平均され、I2I-RFRの初期ノイズも全volumeで共有されます。
+
+```bash
+python predict.py results/exp_0001/checkpoints/model_latest.keras \
+  --source-data-dir /path/to/images \
+  --sliding-window \
+  --window-overlap 0.5
+```
+
+windowサイズには学習時の `aug.crop_size_zyx` を使用します。入力spacingが
+学習spacingと異なる場合は内部でリサンプルし、推論後に入力と同じsize・spacingへ
+戻して保存します。結果はデフォルトで次に保存されます。
+
+```text
+results/exp_0001/preds_full/
+```
+
+保存先とI2I-RFR初期ノイズは変更できます。
+
+```bash
+python predict.py results/exp_0001/checkpoints/model_latest.keras \
+  --source-data-dir /path/to/images \
+  --sliding-window \
+  --output-dir /path/to/output \
+  --seed 123
+```
+
+sliding-window推論ではtarget画像を使用しないため、pairedモデルでも
+`--source-data-dir` だけで実行できます。通常のcrop推論を行うpairedモデルでは、
+sourceとtargetを両方指定してください。
 
 ```bash
 python predict.py results/exp_0001/checkpoints/model_latest.keras \
@@ -348,7 +392,8 @@ GPU自体の空き容量が不足している場合は、CPU推論でも切り�
 python predict.py results/exp_0001/checkpoints/model_latest.keras --gpu -1
 ```
 
-cropを小さくすると出力される視野も小さくなる点に注意してください。
+通常のcrop推論では、cropを小さくすると出力視野も小さくなります。
+sliding-window推論ではwindow数が増えますが、最終出力は画像全体のままです。
 
 出力は以下に保存されます。
 

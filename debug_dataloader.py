@@ -14,6 +14,16 @@ def reverse_normalize_img(img, min_val, max_val) -> None:
     img += min_val
 
 
+def restore_img(img, min_val, max_val):
+    """Convert one normalized z-y-x-channel image back to an int16 volume."""
+    img = np.array(img[:, :, :, 0], np.float32, copy=True)
+    if (min_val is None) or (max_val is None):
+        assert (min_val is None) and (max_val is None), (min_val, max_val)
+    else:
+        reverse_normalize_img(img, min_val, max_val)
+    return img.astype(np.int16)
+
+
 def save_imgs(key_batch, img_batch, save_root, spacing_zyx, min_val, max_val):
     assert img_batch.ndim == 5
     assert save_root.exists(), save_root
@@ -22,15 +32,44 @@ def save_imgs(key_batch, img_batch, save_root, spacing_zyx, min_val, max_val):
         max_val = [max_val] * len(img_batch)
     for key, img, _min, _max in zip(key_batch, img_batch, min_val, max_val):
         print(f"saving img: {key}")
-        img = img[:, :, :, 0]
-
-        if (_min is None) or (_max is None):
-            assert (_min is None) and (_max is None), (_min, max_val)
-        else:
-            reverse_normalize_img(img, _min, _max)
-
+        img = restore_img(img, _min, _max)
         hdr_path = save_root / (key + ".hdr")
-        save_raw(img.astype(np.int16), spacing_zyx, hdr_path)
+        save_raw(img, spacing_zyx, hdr_path)
+
+
+def save_comparison_imgs(
+    key_batch,
+    source_batch,
+    target_batch,
+    save_root,
+    spacing_zyx,
+    source_min_vals,
+    source_max_vals,
+    target_min_vals,
+    target_max_vals,
+    separator_width=4,
+):
+    """Save source | separator | target volumes along the X axis."""
+    assert source_batch.shape == target_batch.shape
+    assert save_root.exists(), save_root
+    values = zip(
+        key_batch,
+        source_batch,
+        target_batch,
+        source_min_vals,
+        source_max_vals,
+        target_min_vals,
+        target_max_vals,
+    )
+    for key, source, target, source_min, source_max, target_min, target_max in values:
+        print(f"saving comparison: {key}")
+        source = restore_img(source, source_min, source_max)
+        target = restore_img(target, target_min, target_max)
+        separator_shape = list(source.shape)
+        separator_shape[2] = separator_width
+        separator = np.zeros(separator_shape, dtype=np.int16)
+        comparison = np.concatenate([source, separator, target], axis=2)
+        save_raw(comparison, spacing_zyx, save_root / (key + ".hdr"))
 
 
 def save_msks(key_batch, msk_batch, save_root, spacing_zyx, bit_dict):
@@ -39,16 +78,21 @@ def save_msks(key_batch, msk_batch, save_root, spacing_zyx, bit_dict):
     for key, msk in zip(key_batch, msk_batch):
         print(f"saving msk: {key}")
         msk = msk.astype(np.uint16)
-        src_dst_bit_dict = {i: i for i in range(msk.shape[-1])}
         msk_hdr = save_root / (key + ".mask.hdr")
-        save_re4(
-            msk,
-            spacing_zyx,
-            "mask",
-            msk_hdr,
-            src_dst_bit_dict=src_dst_bit_dict,
-            bit_dict=bit_dict,
-        )
+        if msk.shape[-1] == 1:
+            # irg.save_re4は1channel + src_dst_bit_dict指定時に内部squeeze後も
+            # 4Dとして扱うため、1channelは明示的に3Dへ変換する。
+            save_re4(msk[..., 0], spacing_zyx, "mask", msk_hdr, bit_dict=bit_dict)
+        else:
+            src_dst_bit_dict = {i: i for i in range(msk.shape[-1])}
+            save_re4(
+                msk,
+                spacing_zyx,
+                "mask",
+                msk_hdr,
+                src_dst_bit_dict=src_dst_bit_dict,
+                bit_dict=bit_dict,
+            )
 
 
 if __name__ == "__main__":
@@ -119,8 +163,22 @@ if __name__ == "__main__":
 
             source_save_dir = save_dir / "source"
             target_save_dir = save_dir / "target"
+            comparison_save_dir = save_dir / "comparison"
             source_save_dir.mkdir(exist_ok=True)
             target_save_dir.mkdir(exist_ok=True)
+            comparison_save_dir.mkdir(exist_ok=True)
+
+            save_comparison_imgs(
+                img_hdr_list,
+                batch["imgs"],
+                batch["target_imgs"],
+                comparison_save_dir,
+                spacing_zyx,
+                batch["min_clip_vals"],
+                batch["max_clip_vals"],
+                batch["target_min_clip_vals"],
+                batch["target_max_clip_vals"],
+            )
 
             save_imgs(
                 img_hdr_list,
