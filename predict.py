@@ -70,6 +70,18 @@ if __name__ == "__main__":
     parser.add_argument("checkpoint_path", type=Path)
     parser.add_argument("--gpu", default="0", type=str, help="gpu num (default 0)")
     parser.add_argument(
+        "--source-data-dir",
+        type=Path,
+        default=None,
+        help="推論対象のsourceフォルダ。未指定ならoutput.yamlの設定を使う",
+    )
+    parser.add_argument(
+        "--target-data-dir",
+        type=Path,
+        default=None,
+        help="pairedモードのtargetフォルダ。sourceを上書きする場合は指定必須",
+    )
+    parser.add_argument(
         "--no-gpu-allow-growth",
         action="store_false",
         dest="gpu_allow_growth",
@@ -131,6 +143,24 @@ if __name__ == "__main__":
     cfg.num_workers = args.num_workers
     cfg.prefetch_size = args.prefetch_size
     cfg.debug_dataloader = True
+    training_mode = get_training_mode(cfg)
+    if training_mode == "paired" and bool(args.source_data_dir) != bool(
+        args.target_data_dir
+    ):
+        parser.error(
+            "pairedモードでデータフォルダを上書きする場合は、"
+            "--source-data-dirと--target-data-dirを両方指定してください"
+        )
+    if training_mode == "self_supervised_deblur" and args.target_data_dir is not None:
+        parser.error("self_supervised_deblurモードでは--target-data-dirは使用しません")
+    if args.source_data_dir is not None:
+        if not args.source_data_dir.is_dir():
+            parser.error(f"sourceフォルダが見つかりません: {args.source_data_dir}")
+        cfg.source_data_dir = str(args.source_data_dir)
+    if args.target_data_dir is not None:
+        if not args.target_data_dir.is_dir():
+            parser.error(f"targetフォルダが見つかりません: {args.target_data_dir}")
+        cfg.target_data_dir = str(args.target_data_dir)
     if args.crop_size_zyx is not None:
         if any(size <= 0 for size in args.crop_size_zyx):
             parser.error("--crop-size-zyxには正の整数を指定してください")
@@ -164,7 +194,7 @@ if __name__ == "__main__":
 
     # データを準備
     val_dict = prepare_data_dict(
-        cfg.source_data_dir, cfg.target_data_dir, training_mode=get_training_mode(cfg)
+        cfg.source_data_dir, cfg.target_data_dir, training_mode=training_mode
     )[1]
     test_loader = create_dataloader(val_dict, is_training=False, cfg=cfg)
 

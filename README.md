@@ -254,6 +254,25 @@ python predict.py results/exp_0001/checkpoints/model_latest.keras \
   --clip-output
 ```
 
+自己教師ありdeblurモデルで任意のフォルダを推論する場合は、
+`--source-data-dir` で指定します。
+
+```bash
+python predict.py results/exp_0001/checkpoints/model_latest.keras \
+  --source-data-dir /path/to/images
+```
+
+pairedモデルではsourceとtargetを両方指定してください。
+
+```bash
+python predict.py results/exp_0001/checkpoints/model_latest.keras \
+  --source-data-dir /path/to/source \
+  --target-data-dir /path/to/target
+```
+
+オプションを省略した場合は、これまでどおり `output.yaml` の
+`source_data_dir` と `target_data_dir` を使用します。
+
 `predict.py` は推論時に不要なoptimizer状態をロードせず、GPUメモリを
 段階的に確保します。それでも `ResourceExhaustedError` が出る場合は、まず
 データローダと比較画像のメモリを抑えて確認してください。
