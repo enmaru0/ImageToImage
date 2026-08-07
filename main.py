@@ -165,6 +165,18 @@ def read_cfg_and_parse_arg():
             motion_cfg = cfg.self_supervised_deblur.cardiac_motion
             if motion_cfg.num_phases < 3 or motion_cfg.num_phases % 2 == 0:
                 raise ValueError("cardiac_motion.num_phasesは3以上の奇数にしてください")
+            num_phases_range = getattr(motion_cfg, "num_phases_range", None)
+            if num_phases_range is not None:
+                if (
+                    len(num_phases_range) != 2
+                    or num_phases_range[0] < 3
+                    or num_phases_range[0] > num_phases_range[1]
+                    or any(value % 2 == 0 for value in num_phases_range)
+                ):
+                    raise ValueError(
+                        "cardiac_motion.num_phases_rangeは3以上の奇数で"
+                        "min <= maxとなる[min, max]にしてください"
+                    )
             if (
                 len(motion_cfg.max_translation_mm_yx) != 2
                 or min(motion_cfg.max_translation_mm_yx) < 0

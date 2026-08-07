@@ -58,6 +58,7 @@ self_supervised_deblur:
   degradation_type: cardiac_motion
   cardiac_motion:
     num_phases: 5
+    num_phases_range: null
     max_translation_mm_yx: [3.0, 3.0]
     max_rotation_deg: 3.0
     max_scale_delta: 0.04
@@ -69,6 +70,8 @@ self_supervised_deblur:
 ```
 
 - 移動量は正規化後spacingに対するmm単位です。
+- `num_phases_range: [3, 7]` とすると、学習時は画像ごとに3、5、7時相から
+  ランダムに選びます。validationでは再現性のため `num_phases` を固定使用します。
 - `roi_center_yx` はcrop内の心臓中心、`roi_sigma_ratio_yx` はmotion範囲を
   Y/Xサイズに対する比率で指定します。
 - 全Zスライスに同じ心拍軌跡を適用し、スライスごとのランダムな位置ずれは

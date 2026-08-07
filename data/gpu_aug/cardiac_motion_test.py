@@ -3,7 +3,7 @@ import tensorflow as tf
 from omegaconf import OmegaConf
 
 from trainer import CustomModel
-from .cardiac_motion import cardiac_motion_blur
+from .cardiac_motion import _sample_num_phases, cardiac_motion_blur
 
 
 def _validation_kwargs(**overrides):
@@ -68,6 +68,20 @@ def test_motion_is_consistent_between_identical_slices_and_xla_compatible():
         np.testing.assert_allclose(
             output[:, 0].numpy(), output[:, z_index].numpy(), atol=1e-6
         )
+
+
+def test_random_num_phases_uses_only_odd_values_and_validation_is_fixed():
+    training_counts, max_loop_phases = _sample_num_phases(
+        batch_size=128, num_phases=5, num_phases_range=(3, 7), is_training=True
+    )
+    assert max_loop_phases == 7
+    assert set(training_counts.numpy()).issubset({3, 5, 7})
+
+    validation_counts, max_loop_phases = _sample_num_phases(
+        batch_size=8, num_phases=5, num_phases_range=(3, 7), is_training=False
+    )
+    assert max_loop_phases == 5
+    np.testing.assert_array_equal(validation_counts.numpy(), np.full(8, 5))
 
 
 def test_self_supervised_source_is_created_from_clean_target():

@@ -117,6 +117,9 @@ self_supervised_deblur:
   # 投影データを使わず、画像空間で複数心拍位相をwarp・平均するCT向け近似
   cardiac_motion:
     num_phases: 5
+    # nullなら固定。例: [3,7]なら学習時に画像ごとに3/5/7から選択
+    # validationは上のnum_phasesを固定使用する
+    num_phases_range: null
     max_translation_mm_yx: [3.0,3.0]
     max_rotation_deg: 3.0
     max_scale_delta: 0.04

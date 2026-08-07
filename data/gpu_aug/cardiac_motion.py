@@ -90,11 +90,25 @@ def _sample_endpoint_parameters(
     return translation_px, rotation_rad, scale_delta
 
 
+def _sample_num_phases(batch_size, num_phases, num_phases_range, is_training):
+    """Sample an odd phase count per volume while keeping an XLA-static max loop."""
+    if not is_training or num_phases_range is None:
+        return tf.fill((batch_size,), tf.cast(num_phases, tf.int32)), int(num_phases)
+
+    min_phases, max_phases = (int(value) for value in num_phases_range)
+    num_choices = (max_phases - min_phases) // 2 + 1
+    choice = tf.random.uniform(
+        (batch_size,), minval=0, maxval=num_choices, dtype=tf.int32
+    )
+    return min_phases + choice * 2, max_phases
+
+
 def cardiac_motion_blur(
     imgs,
     img_msks,
     spacing_mm_yx,
     num_phases=5,
+    num_phases_range=None,
     max_translation_mm_yx=(3.0, 3.0),
     max_rotation_deg=3.0,
     max_scale_delta=0.04,
@@ -163,10 +177,15 @@ def cardiac_motion_blur(
     scale_delta = scale_delta[:, None, None]
 
     accumulated = tf.zeros_like(imgs_2d)
-    phase_positions = tf.linspace(
-        tf.cast(-1.0, dtype), tf.cast(1.0, dtype), int(num_phases)
+    phase_counts, max_loop_phases = _sample_num_phases(
+        batch_size, num_phases, num_phases_range, is_training
     )
-    for phase_position in tf.unstack(phase_positions):
+    phase_denominator = tf.cast(tf.maximum(phase_counts - 1, 1), dtype)
+    for phase_index in range(max_loop_phases):
+        active = phase_index < phase_counts
+        bounded_index = tf.minimum(phase_index, phase_counts - 1)
+        phase_position = -1.0 + 2.0 * tf.cast(bounded_index, dtype) / phase_denominator
+        phase_position = phase_position[:, None, None]
         angle = phase_position * rotation_rad
         scale = 1.0 + phase_position * scale_delta
         cos_angle = tf.cos(angle) / scale
@@ -183,9 +202,9 @@ def cardiac_motion_blur(
         warped_img = warped_img / tf.maximum(warped_msk, tf.cast(1e-6, dtype))
         warped_img = tf.where(warped_msk > 1e-6, warped_img, imgs_2d)
         phase_img = roi_weight * warped_img + (1.0 - roi_weight) * imgs_2d
-        accumulated += phase_img
+        accumulated += phase_img * tf.cast(active[:, None, None, None], dtype)
 
-    blurred_2d = accumulated / tf.cast(num_phases, dtype)
+    blurred_2d = accumulated / tf.cast(phase_counts[:, None, None, None], dtype)
     blurred = tf.transpose(blurred_2d, (0, 3, 1, 2))[..., None]
     blurred = tf.reshape(blurred, (batch_size, depth, height, width, 1))
     return tf.clip_by_value(blurred, 0.0, 1.0) * img_msks
