@@ -143,11 +143,16 @@ def preprocess_image_np(
     target_img = affine_transform.apply(target_img, affine_matrix, order=1)
 
     # thin->thick変換の準備
+    # self-supervisedのsource劣化は、clean targetへの共通augmentation後に
+    # trainer側で適用する。ここでsourceだけを変形しても後段で使われない。
+    thick2thin_rate_zyx = cfg.aug.thick2thin_rate_zyx
+    if str(getattr(cfg, "training_mode", "paired")) == "self_supervised_deblur":
+        thick2thin_rate_zyx = [0.0, 0.0, 0.0]
     thin2thick_param = prepare_thin2thick(
         spacing_zyx,
         affine_transform.norm_spacing_zyx,
         crop_size_zyx,
-        cfg.aug.thick2thin_rate_zyx,
+        thick2thin_rate_zyx,
         is_training=is_training,
         spacing_max_val=2,
         thickness_range=[2, 6],

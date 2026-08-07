@@ -110,8 +110,22 @@ aug:
 
 # 単一ディレクトリの画像をclean targetとし、入力側に合成blurを加える設定
 self_supervised_deblur:
+  # gaussian / cardiac_motion / cardiac_motion_gaussian
+  degradation_type: gaussian
   sigma_range: [0.5,2.0] # 学習時に画像ごとに選ぶGaussian sigma（voxel単位）
   validation_sigma: 1.25 # validation時は再現可能な固定sigmaを使う
+  # 投影データを使わず、画像空間で複数心拍位相をwarp・平均するCT向け近似
+  cardiac_motion:
+    num_phases: 5
+    max_translation_mm_yx: [3.0,3.0]
+    max_rotation_deg: 3.0
+    max_scale_delta: 0.04
+    roi_center_yx: [0.5,0.5] # crop内の心臓中心（0-1）
+    roi_sigma_ratio_yx: [0.25,0.25] # motionを局在化するGaussian ROI
+    # validationでは固定パラメータを使い、症例間比較を再現可能にする
+    validation_translation_mm_yx: [2.0,-2.0]
+    validation_rotation_deg: 2.0
+    validation_scale_delta: 0.025
 
 i2i_rfr:
   p: 1.0 # 論文デフォルト: L1

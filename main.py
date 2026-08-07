@@ -137,20 +137,68 @@ def read_cfg_and_parse_arg():
             "指定してください"
         )
     if training_mode == "self_supervised_deblur":
-        sigma_range = list(cfg.self_supervised_deblur.sigma_range)
-        if (
-            len(sigma_range) != 2
-            or sigma_range[0] <= 0
-            or sigma_range[0] >= sigma_range[1]
-        ):
+        degradation_type = str(
+            getattr(cfg.self_supervised_deblur, "degradation_type", "gaussian")
+        )
+        allowed_degradations = ["gaussian", "cardiac_motion", "cardiac_motion_gaussian"]
+        if degradation_type not in allowed_degradations:
             raise ValueError(
-                "self_supervised_deblur.sigma_rangeは0より大きい"
-                "min < maxの[min, max]で指定してください"
+                "self_supervised_deblur.degradation_typeは"
+                f"{allowed_degradations}から指定してください"
             )
-        if cfg.self_supervised_deblur.validation_sigma <= 0:
-            raise ValueError(
-                "self_supervised_deblur.validation_sigmaは0より大きくしてください"
-            )
+        if degradation_type in ["gaussian", "cardiac_motion_gaussian"]:
+            sigma_range = list(cfg.self_supervised_deblur.sigma_range)
+            if (
+                len(sigma_range) != 2
+                or sigma_range[0] <= 0
+                or sigma_range[0] >= sigma_range[1]
+            ):
+                raise ValueError(
+                    "self_supervised_deblur.sigma_rangeは0より大きい"
+                    "min < maxの[min, max]で指定してください"
+                )
+            if cfg.self_supervised_deblur.validation_sigma <= 0:
+                raise ValueError(
+                    "self_supervised_deblur.validation_sigmaは0より大きくしてください"
+                )
+        if degradation_type in ["cardiac_motion", "cardiac_motion_gaussian"]:
+            motion_cfg = cfg.self_supervised_deblur.cardiac_motion
+            if motion_cfg.num_phases < 3 or motion_cfg.num_phases % 2 == 0:
+                raise ValueError("cardiac_motion.num_phasesは3以上の奇数にしてください")
+            if (
+                len(motion_cfg.max_translation_mm_yx) != 2
+                or min(motion_cfg.max_translation_mm_yx) < 0
+            ):
+                raise ValueError(
+                    "cardiac_motion.max_translation_mm_yxは非負の[Y, X]にしてください"
+                )
+            if motion_cfg.max_rotation_deg < 0:
+                raise ValueError("cardiac_motion.max_rotation_degは非負にしてください")
+            if not 0 <= motion_cfg.max_scale_delta < 1:
+                raise ValueError(
+                    "cardiac_motion.max_scale_deltaは0以上1未満にしてください"
+                )
+            if len(motion_cfg.roi_center_yx) != 2 or not all(
+                0 <= value <= 1 for value in motion_cfg.roi_center_yx
+            ):
+                raise ValueError(
+                    "cardiac_motion.roi_center_yxは0-1の[Y, X]にしてください"
+                )
+            if (
+                len(motion_cfg.roi_sigma_ratio_yx) != 2
+                or min(motion_cfg.roi_sigma_ratio_yx) <= 0
+            ):
+                raise ValueError(
+                    "cardiac_motion.roi_sigma_ratio_yxは正の[Y, X]にしてください"
+                )
+            if len(motion_cfg.validation_translation_mm_yx) != 2:
+                raise ValueError(
+                    "cardiac_motion.validation_translation_mm_yxは[Y, X]にしてください"
+                )
+            if abs(motion_cfg.validation_scale_delta) >= 1:
+                raise ValueError(
+                    "cardiac_motion.validation_scale_deltaの絶対値は1未満にしてください"
+                )
     return cfg
 
 

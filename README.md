@@ -18,7 +18,7 @@ https://arxiv.org/abs/2603.20186
 
 ## 単一ディレクトリでdeblurを学習する
 
-`training_mode: self_supervised_deblur` を指定すると、`source_data_dir` の画像だけで学習できます。各画像をclean targetとして再利用し、入力側にだけランダムなGaussian blurを合成して、blur画像から元画像へ戻すdeblurを学習します。`target_data_dir`はこのモードでは使いません。
+`training_mode: self_supervised_deblur` を指定すると、`source_data_dir` の画像だけで学習できます。各画像をclean targetとして再利用し、入力側にだけ設定した劣化を合成して、劣化画像から元画像へ戻すdeblurを学習します。`target_data_dir`はこのモードでは使いません。
 
 ```bash
 python main.py --overrides \
@@ -27,13 +27,60 @@ python main.py --overrides \
   exp_dir=results/self_deblur
 ```
 
-blurの強さはvoxel単位のsigmaで設定します。学習時は画像ごとに範囲内からランダムに選び、validation時は比較可能なように固定値を使います。
+従来のGaussian blurを使う場合は `degradation_type: gaussian` を指定します。
+blurの強さはvoxel単位のsigmaで設定し、学習時は画像ごとに範囲内から
+ランダムに選びます。
 
 ```yaml
 self_supervised_deblur:
+  degradation_type: gaussian
   sigma_range: [0.5, 2.0]
   validation_sigma: 1.25
 ```
+
+### 心臓CTのmotion blur近似
+
+`degradation_type: cardiac_motion` では、clean画像に対して平行移動、回転、
+収縮・拡張を加えた複数の心拍位相を作り、その平均をsourceにします。
+投影データを使わない画像空間での近似ですが、一様なGaussian blurよりも
+二重輪郭や局所的な心拍ブレを再現できます。
+
+```bash
+python main.py --overrides \
+  training_mode=self_supervised_deblur \
+  source_data_dir=datasets_images \
+  exp_dir=results/self_deblur_cardiac \
+  self_supervised_deblur.degradation_type=cardiac_motion
+```
+
+```yaml
+self_supervised_deblur:
+  degradation_type: cardiac_motion
+  cardiac_motion:
+    num_phases: 5
+    max_translation_mm_yx: [3.0, 3.0]
+    max_rotation_deg: 3.0
+    max_scale_delta: 0.04
+    roi_center_yx: [0.5, 0.5]
+    roi_sigma_ratio_yx: [0.25, 0.25]
+    validation_translation_mm_yx: [2.0, -2.0]
+    validation_rotation_deg: 2.0
+    validation_scale_delta: 0.025
+```
+
+- 移動量は正規化後spacingに対するmm単位です。
+- `roi_center_yx` はcrop内の心臓中心、`roi_sigma_ratio_yx` はmotion範囲を
+  Y/Xサイズに対する比率で指定します。
+- 全Zスライスに同じ心拍軌跡を適用し、スライスごとのランダムな位置ずれは
+  発生させません。
+- padding境界はwarped maskで正規化し、ゼロ値の混入による暗い縁と
+  その逆補正による高信号haloを抑えます。
+- `cardiac_motion_gaussian` を指定すると、心拍motion後にGaussian blurも
+  追加できます。まずは `cardiac_motion` 単独での比較を推奨します。
+
+これは画像空間の近似なので、CT投影角ごとのmotionに由来するstreak artifactを
+完全には再現しません。実データに合わせる際は、TensorBoardの `Source Images` と
+`Target Images` を比較し、移動量とROIを調整してください。
 
 データ配置は、ルート直下に `.hdr/.raw` を置くか、`train` / `val` に分けます。自己教師ありモードでは各ディレクトリ以下を再帰探索するため、spacingなどでさらにサブフォルダへ分けても利用できます。
 
@@ -49,9 +96,11 @@ datasets_images/
       case101.raw
 ```
 
-`val` が無い場合は、`train` の画像をvalidationにも使用します。`debug_dataloader.py` の `source` 出力には合成blur後の画像、`target` 出力には元画像が保存されるため、学習前にblur強度を確認できます。
+`val` が無い場合は、`train` の画像をvalidationにも使用します。合成劣化後の
+sourceとclean targetは、学習時のTensorBoardに記録される `Source Images` と
+`Target Images` で確認できます。
 
-自己教師ありモードでは、正規化、gamma、sharpness、noiseなど既存の信号augmentationをsource/targetで共有します。共有augmentation後の画像をclean targetとしてコピーし、sourceにだけdeblur学習用のGaussian blurを追加するため、学習ペアの差分はこのblurだけになります。
+自己教師ありモードでは、正規化、gamma、sharpness、noiseなど既存の信号augmentationをsource/targetで共有します。clean targetへ共有augmentationを一度だけ適用してsourceへコピーし、そのsourceだけに選択した劣化を加えます。
 
 なお、この方式は「元画像よりさらにぼかした画像 → 元画像」という再劣化ペアを作る自己教師あり学習です。入力画像自体に強いblurが含まれている場合、その完全にsharpな正解画像を直接与える方式ではありません。
 

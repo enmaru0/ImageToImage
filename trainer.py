@@ -8,6 +8,7 @@ from tensorflow import GradientTape
 from data.gpu_aug import (
     apply_random_gaussian_noise,
     apply_random_sharpness_or_gaussian_filter,
+    cardiac_motion_blur,
     gaussian_filter,
     normalize,
     random_gaussian_filter,
@@ -295,15 +296,19 @@ class CustomModel(Model):
         cfg,
     ):
         """Prepare source/target while keeping self-supervised signals aligned."""
-        imgs = cls.gpu_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg)
         training_mode = str(getattr(cfg, "training_mode", "paired"))
         if training_mode == "self_supervised_deblur":
-            # sourceとtargetで信号変換を完全に共有し、この後のblurだけを差分にする。
-            target_imgs = tf.identity(imgs)
+            # clean targetに信号augmentationを一度だけ適用してsourceへコピーする。
+            # これにより信号変換は共有し、以下の劣化だけをsource/target差分にする。
+            target_imgs = cls.gpu_aug(
+                target_imgs, img_msks, target_min_clip_vals, target_max_clip_vals, cfg
+            )
+            imgs = tf.identity(target_imgs)
             imgs = cls.apply_self_supervised_deblur(
                 imgs, img_msks, cfg, is_training=True
             )
         else:
+            imgs = cls.gpu_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg)
             target_imgs = cls.normalize_target(
                 target_imgs, img_msks, target_min_clip_vals, target_max_clip_vals
             )
@@ -316,14 +321,26 @@ class CustomModel(Model):
         if training_mode != "self_supervised_deblur":
             return imgs
 
-        if is_training:
-            imgs = random_gaussian_filter(
-                imgs, sigma_range=cfg.self_supervised_deblur.sigma_range
+        degradation_type = str(
+            getattr(cfg.self_supervised_deblur, "degradation_type", "gaussian")
+        )
+        if degradation_type in ["cardiac_motion", "cardiac_motion_gaussian"]:
+            imgs = cardiac_motion_blur(
+                imgs,
+                img_msks,
+                spacing_mm_yx=cfg.aug.affine.norm_spacing_zyx[1:3],
+                is_training=is_training,
+                **cfg.self_supervised_deblur.cardiac_motion,
             )
-        else:
-            imgs = gaussian_filter(
-                imgs, sigma=float(cfg.self_supervised_deblur.validation_sigma)
-            )
+        if degradation_type in ["gaussian", "cardiac_motion_gaussian"]:
+            if is_training:
+                imgs = random_gaussian_filter(
+                    imgs, sigma_range=cfg.self_supervised_deblur.sigma_range
+                )
+            else:
+                imgs = gaussian_filter(
+                    imgs, sigma=float(cfg.self_supervised_deblur.validation_sigma)
+                )
         return imgs * img_msks
 
     def _get_metrics_result(self):

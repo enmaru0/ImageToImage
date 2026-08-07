@@ -1,3 +1,4 @@
+from .cardiac_motion import cardiac_motion_blur
 from .filter import gaussian_filter
 from .morphology import binary_dilation_3d, binary_erosion_3d
 from .normalize import normalize, random_gamma_correction, random_normalize
@@ -13,6 +14,7 @@ from .random_noise import (
 )
 
 __all__ = [
+    "cardiac_motion_blur",
     "normalize",
     "random_gamma_correction",
     "gaussian_filter",
