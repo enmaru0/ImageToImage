@@ -127,6 +127,9 @@ def read_cfg_and_parse_arg():
     assert cfg.model.num_channel == 1, (
         "現在のI2I-RFR実装は1チャンネル出力を想定しています"
     )
+    gradient_loss_cfg = getattr(cfg.loss, "gradient", None)
+    if gradient_loss_cfg is not None and gradient_loss_cfg.weight < 0:
+        raise ValueError("loss.gradient.weightは0以上にしてください")
     if cfg.model.unet.downsample_type not in ["max_pool", "stride_conv"]:
         raise ValueError(
             "model.unet.downsample_typeはmax_poolまたはstride_convを指定してください"
@@ -249,6 +252,9 @@ def read_cfg_and_parse_arg():
             max_z_phase_offset = float(getattr(motion_cfg, "max_z_phase_offset", 0.0))
             if not 0 <= max_z_phase_offset <= 1:
                 raise ValueError("cardiac_motion.max_z_phase_offsetは0-1にしてください")
+            center_preserving = getattr(motion_cfg, "center_preserving", False)
+            if not isinstance(center_preserving, bool):
+                raise ValueError("cardiac_motion.center_preservingはboolにしてください")
             if len(motion_cfg.validation_translation_mm_yx) != 2:
                 raise ValueError(
                     "cardiac_motion.validation_translation_mm_yxは[Y, X]にしてください"

@@ -126,6 +126,37 @@ def test_z_phase_offset_creates_smooth_slice_dependent_motion():
     assert 0 < adjacent_difference < endpoint_difference
 
 
+def test_center_preserving_keeps_asymmetric_double_edge_centered():
+    image = np.zeros((1, 1, 65, 65, 1), np.float32)
+    image[0, 0, 32, 32, 0] = 1.0
+    imgs = tf.constant(image)
+    img_msks = tf.ones_like(imgs)
+    kwargs = _validation_kwargs(
+        num_phases=5,
+        roi_sigma_ratio_yx=(1000.0, 1000.0),
+        phase_weight_mode="bimodal",
+        bimodal_peak_sigma_range=(0.25, 0.25),
+        bimodal_balance_range=(0.8, 0.8),
+        uniform_phase_weight_mix=0.05,
+        validation_translation_mm_yx=(0.0, 8.0),
+        validation_bimodal_peak_sigma=0.25,
+        validation_bimodal_balance=0.8,
+    )
+
+    uncentered = cardiac_motion_blur(imgs, img_msks, center_preserving=False, **kwargs)
+    centered = cardiac_motion_blur(imgs, img_msks, center_preserving=True, **kwargs)
+    x_coords = tf.cast(tf.range(65), tf.float32)[None, :]
+    uncentered_x = tf.reduce_sum(uncentered[0, 0, :, :, 0] * x_coords) / tf.reduce_sum(
+        uncentered
+    )
+    centered_x = tf.reduce_sum(centered[0, 0, :, :, 0] * x_coords) / tf.reduce_sum(
+        centered
+    )
+
+    np.testing.assert_allclose(centered_x.numpy(), 32.0, atol=0.05)
+    assert abs(float(centered_x) - 32.0) < abs(float(uncentered_x) - 32.0)
+
+
 def test_roi_attenuates_displacement_instead_of_blending_intensities():
     grid_y = tf.constant([[[0.0, 1.0, 2.0]]])
     grid_x = tf.constant([[[2.0, 3.0, 4.0]]])

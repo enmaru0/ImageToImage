@@ -149,6 +149,45 @@ def _localize_displacement(grid_y, grid_x, transformed_y, transformed_x, roi_wei
     return source_y, source_x
 
 
+def _motion_source_coordinates(
+    phase_position,
+    z_position,
+    z_phase_offset,
+    temporal_asymmetry,
+    rotation_rad,
+    scale_delta,
+    translation_y,
+    translation_x,
+    grid_y,
+    grid_x,
+    center_y,
+    center_x,
+    roi_weight,
+):
+    """Create a smooth slice-dependent inverse displacement field for one phase."""
+    phase_position_z = tf.clip_by_value(
+        phase_position[:, None] + z_position * z_phase_offset[:, None], -1.0, 1.0
+    )
+    # Keep both endpoints fixed while bending the trajectory between them.
+    motion_position = phase_position_z + temporal_asymmetry[:, None] * (
+        tf.square(phase_position_z) - 1.0
+    )
+    motion_position = motion_position[:, :, None, None]
+
+    angle = motion_position * rotation_rad[:, :, None, None]
+    scale = 1.0 + motion_position * scale_delta[:, :, None, None]
+    cos_angle = tf.cos(angle) / scale
+    sin_angle = tf.sin(angle) / scale
+
+    shifted_x = grid_x[None] - center_x - motion_position * translation_x[:, None]
+    shifted_y = grid_y[None] - center_y - motion_position * translation_y[:, None]
+    transformed_x = cos_angle * shifted_x + sin_angle * shifted_y + center_x
+    transformed_y = -sin_angle * shifted_x + cos_angle * shifted_y + center_y
+    return _localize_displacement(
+        grid_y[None], grid_x[None], transformed_y, transformed_x, roi_weight
+    )
+
+
 def cardiac_motion_blur(
     imgs,
     img_msks,
@@ -166,6 +205,7 @@ def cardiac_motion_blur(
     uniform_phase_weight_mix=0.1,
     max_temporal_asymmetry=0.0,
     max_z_phase_offset=0.0,
+    center_preserving=False,
     validation_translation_mm_yx=(2.0, -2.0),
     validation_rotation_deg=2.0,
     validation_scale_delta=0.025,
@@ -178,13 +218,15 @@ def cardiac_motion_blur(
     """Approximate cardiac CT motion by averaging smooth in-plane heart motion.
 
     Phase weights can emphasize two separated cardiac states to create double
-    contours. Temporal asymmetry produces a non-uniform trajectory, while a
-    smooth Z phase offset approximates the phase drift of a helical non-gated
-    acquisition. A Gaussian ROI attenuates the displacement field so each phase
-    contains one continuously deformed image rather than an intensity blend of
-    original and moved contours. Warped values are normalized by a warped
-    validity mask so padding does not create a dark edge that the model could
-    learn to overshoot.
+    contours. When center_preserving is enabled, the exposure-weighted mean
+    displacement is removed at every voxel, making the clean image the unique
+    center of the synthetic motion. Temporal asymmetry produces a non-uniform
+    trajectory, while a smooth Z phase offset approximates the phase drift of a
+    helical non-gated acquisition. A Gaussian ROI attenuates the displacement
+    field so each phase contains one continuously deformed image rather than an
+    intensity blend of original and moved contours. Warped values are normalized
+    by a warped validity mask so padding does not create a dark edge that the
+    model could learn to overshoot.
     """
     imgs = tf.convert_to_tensor(imgs)
     img_msks = tf.cast(img_msks, imgs.dtype)
@@ -266,13 +308,12 @@ def cardiac_motion_blur(
     z_position = tf.linspace(tf.cast(-1.0, dtype), tf.cast(1.0, dtype), depth)
     z_position = z_position[None]
 
-    accumulated = tf.zeros_like(imgs)
-    accumulated_weight = tf.zeros((batch_size, 1, 1, 1, 1), dtype=dtype)
     phase_counts, max_loop_phases = _sample_num_phases(
         batch_size, num_phases, num_phases_range, is_training
     )
     phase_denominator = tf.cast(tf.maximum(phase_counts - 1, 1), dtype)
-    for phase_index in range(max_loop_phases):
+
+    def get_phase_state(phase_index):
         active = phase_index < phase_counts
         bounded_index = tf.minimum(phase_index, phase_counts - 1)
         phase_position = -1.0 + 2.0 * tf.cast(bounded_index, dtype) / phase_denominator
@@ -284,29 +325,48 @@ def cardiac_motion_blur(
             bimodal_balance,
             uniform_phase_weight_mix,
         )
-
-        # The phase changes smoothly, rather than independently, along Z.
-        phase_position_z = tf.clip_by_value(
-            phase_position[:, None] + z_position * z_phase_offset[:, None], -1.0, 1.0
+        source_y, source_x = _motion_source_coordinates(
+            phase_position,
+            z_position,
+            z_phase_offset,
+            temporal_asymmetry,
+            rotation_rad,
+            scale_delta,
+            translation_y,
+            translation_x,
+            grid_y,
+            grid_x,
+            center_y,
+            center_x,
+            roi_weight,
         )
-        # Keep both endpoints fixed while bending the trajectory between them.
-        motion_position = phase_position_z + temporal_asymmetry[:, None] * (
-            tf.square(phase_position_z) - 1.0
-        )
-        motion_position = motion_position[:, :, None, None]
+        return phase_weights, source_y, source_x
 
-        angle = motion_position * rotation_rad[:, :, None, None]
-        scale = 1.0 + motion_position * scale_delta[:, :, None, None]
-        cos_angle = tf.cos(angle) / scale
-        sin_angle = tf.sin(angle) / scale
+    # Remove the weighted mean displacement field, not merely the mean affine
+    # parameter. This also centers rotations, scaling and Z-dependent motion.
+    if center_preserving:
+        mean_displacement_y = tf.zeros((batch_size, depth, height, width), dtype=dtype)
+        mean_displacement_x = tf.zeros((batch_size, depth, height, width), dtype=dtype)
+        center_weight = tf.zeros((batch_size, 1, 1, 1), dtype=dtype)
+        for phase_index in range(max_loop_phases):
+            phase_weights, source_y, source_x = get_phase_state(phase_index)
+            phase_weights = phase_weights[:, None, None, None]
+            mean_displacement_y += (source_y - grid_y[None]) * phase_weights
+            mean_displacement_x += (source_x - grid_x[None]) * phase_weights
+            center_weight += phase_weights
+        center_weight = tf.maximum(center_weight, tf.cast(1e-6, dtype))
+        mean_displacement_y /= center_weight
+        mean_displacement_x /= center_weight
+    else:
+        mean_displacement_y = tf.cast(0.0, dtype)
+        mean_displacement_x = tf.cast(0.0, dtype)
 
-        shifted_x = grid_x[None] - center_x - motion_position * translation_x[:, None]
-        shifted_y = grid_y[None] - center_y - motion_position * translation_y[:, None]
-        transformed_x = cos_angle * shifted_x + sin_angle * shifted_y + center_x
-        transformed_y = -sin_angle * shifted_x + cos_angle * shifted_y + center_y
-        source_y, source_x = _localize_displacement(
-            grid_y[None], grid_x[None], transformed_y, transformed_x, roi_weight
-        )
+    accumulated = tf.zeros_like(imgs)
+    accumulated_weight = tf.zeros((batch_size, 1, 1, 1, 1), dtype=dtype)
+    for phase_index in range(max_loop_phases):
+        phase_weights, source_y, source_x = get_phase_state(phase_index)
+        source_y -= mean_displacement_y
+        source_x -= mean_displacement_x
 
         source_y = tf.reshape(source_y, (-1, height, width))
         source_x = tf.reshape(source_x, (-1, height, width))

@@ -133,6 +133,8 @@ self_supervised_deblur:
     # 心運動軌道の非対称性と、ヘリカル撮影を近似するZ方向の位相差
     max_temporal_asymmetry: 0.3
     max_z_phase_offset: 0.35
+    # 各voxelの重み付き平均変位を0にし、二重線の中央をclean targetに固定
+    center_preserving: True
     # validationでは固定パラメータを使い、症例間比較を再現可能にする
     validation_translation_mm_yx: [2.0,-2.0]
     validation_rotation_deg: 2.0
@@ -143,7 +145,7 @@ self_supervised_deblur:
     validation_z_phase_offset: 0.25
   # degradation_typeとは独立に併用できるZ方向のスライス厚劣化
   slice_thickness:
-    enabled: False
+    enabled: True
     clean_thickness_mm: 3.0
     degraded_thickness_mm: 5.0
     gaussian_truncate: 3.0
@@ -157,6 +159,9 @@ i2i_rfr:
 loss:
   rfr:
     weight: 1.0
+  # XYの輪郭位置をtargetへ揃える補助損失。強すぎると境界を過強調する
+  gradient:
+    weight: 0.05
 
 image:
   modality: CT # CT or MR　画像の正規化方法を変えます

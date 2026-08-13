@@ -230,7 +230,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("checkpoint_path", type=Path)
     parser.add_argument("--param_name", type=str, default="CNN")
-    parser.add_argument("--namespace", type=str, default="ProstateSegmentation")
+    parser.add_argument("--namespace", type=str, default="VirtualECGGatedImageGenerator")
     parser.add_argument("--binary", action="store_true", help=" (default false)")
     parser.add_argument("--just_header", action="store_true", help=" (default false)")
     parser.add_argument(

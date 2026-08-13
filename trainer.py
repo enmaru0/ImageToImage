@@ -16,6 +16,7 @@ from data.gpu_aug import (
     random_normalize,
     simulate_slice_thickness,
 )
+from losses.image import masked_xy_gradient_loss
 
 
 def _concat_mask(msk_list):
@@ -62,6 +63,7 @@ class CustomModel(Model):
         if not hasattr(self, "_metrics_dict") or len(self._metrics_dict) == 0:
             self._metrics_dict = {}
             self._metrics_dict["rfr_loss"] = Mean(name="rfr_loss")
+            self._metrics_dict["gradient_loss"] = Mean(name="gradient_loss")
             self._metrics_dict["mae"] = Mean(name="mae")
             self._metrics_dict["mse"] = Mean(name="mse")
             self._metrics_dict["psnr"] = Mean(name="psnr")
@@ -148,7 +150,13 @@ class CustomModel(Model):
         else:
             pixel_error = ops.power(abs_error, p)
         rfr_loss = ops.sum(pixel_error / ops.power(t, p) * img_msks) / denominator
-        return self.cfg.loss.rfr.weight * rfr_loss
+        gradient_loss = masked_xy_gradient_loss(
+            target_imgs, preds, img_msks, time_weight=t
+        )
+        gradient_weight = float(
+            getattr(getattr(self.cfg.loss, "gradient", None), "weight", 0.0)
+        )
+        return self.cfg.loss.rfr.weight * rfr_loss + gradient_weight * gradient_loss
 
     def _update_metrics(self, target_imgs, preds, img_msks, t=None):
         target_imgs = tf.stop_gradient(target_imgs)
@@ -177,8 +185,17 @@ class CustomModel(Model):
                 pixel_error = ops.power(abs_error, p)
             rfr_loss = ops.sum(pixel_error / ops.power(t, p) * img_msks) / denominator
 
-        total_loss = self.cfg.loss.rfr.weight * rfr_loss
+        gradient_loss = masked_xy_gradient_loss(
+            target_imgs, preds, img_msks, time_weight=t
+        )
+        gradient_weight = float(
+            getattr(getattr(self.cfg.loss, "gradient", None), "weight", 0.0)
+        )
+        total_loss = (
+            self.cfg.loss.rfr.weight * rfr_loss + gradient_weight * gradient_loss
+        )
         self.metrics_dict["rfr_loss"].update_state(rfr_loss)
+        self.metrics_dict["gradient_loss"].update_state(gradient_loss)
         self.metrics_dict["mae"].update_state(mae)
         self.metrics_dict["mse"].update_state(mse)
         self.metrics_dict["psnr"].update_state(psnr)
