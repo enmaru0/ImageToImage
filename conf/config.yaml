@@ -125,10 +125,22 @@ self_supervised_deblur:
     max_scale_delta: 0.04
     roi_center_yx: [0.5,0.5] # crop内の心臓中心（0-1）
     roi_sigma_ratio_yx: [0.25,0.25] # motionを局在化するGaussian ROI
+    # 両端の心位相を強くして、実データに近い二重輪郭を生成する
+    phase_weight_mode: bimodal # uniform / bimodal
+    bimodal_peak_sigma_range: [0.2,0.4]
+    bimodal_balance_range: [0.35,0.65] # 2つの輪郭の強度比
+    uniform_phase_weight_mix: 0.1 # 中間位相を残す割合
+    # 心運動軌道の非対称性と、ヘリカル撮影を近似するZ方向の位相差
+    max_temporal_asymmetry: 0.3
+    max_z_phase_offset: 0.35
     # validationでは固定パラメータを使い、症例間比較を再現可能にする
     validation_translation_mm_yx: [2.0,-2.0]
     validation_rotation_deg: 2.0
     validation_scale_delta: 0.025
+    validation_bimodal_peak_sigma: 0.3
+    validation_bimodal_balance: 0.5
+    validation_temporal_asymmetry: 0.2
+    validation_z_phase_offset: 0.25
   # degradation_typeとは独立に併用できるZ方向のスライス厚劣化
   slice_thickness:
     enabled: False

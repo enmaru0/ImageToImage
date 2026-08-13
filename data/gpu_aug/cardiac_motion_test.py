@@ -5,6 +5,7 @@ from omegaconf import OmegaConf
 from trainer import CustomModel
 from .cardiac_motion import (
     _localize_displacement,
+    _phase_weight,
     _sample_num_phases,
     cardiac_motion_blur,
 )
@@ -86,6 +87,43 @@ def test_random_num_phases_uses_only_odd_values_and_validation_is_fixed():
     )
     assert max_loop_phases == 5
     np.testing.assert_array_equal(validation_counts.numpy(), np.full(8, 5))
+
+
+def test_bimodal_phase_weight_emphasizes_separated_endpoint_phases():
+    phase_position = tf.constant([-1.0, -0.5, 0.0, 0.5, 1.0])
+    weights = _phase_weight(
+        phase_position=phase_position,
+        active=tf.ones(5, tf.bool),
+        phase_weight_mode="bimodal",
+        bimodal_peak_sigma=tf.fill((5,), 0.25),
+        bimodal_balance=tf.fill((5,), 0.5),
+        uniform_phase_weight_mix=0.05,
+    ).numpy()
+
+    assert weights[0] > weights[1] > weights[2]
+    assert weights[4] > weights[3] > weights[2]
+    np.testing.assert_allclose(weights[0], weights[4], atol=1e-6)
+
+
+def test_z_phase_offset_creates_smooth_slice_dependent_motion():
+    plane = tf.reshape(tf.linspace(0.0, 1.0, 20 * 20), (1, 1, 20, 20, 1))
+    imgs = tf.repeat(plane, repeats=5, axis=1)
+    img_msks = tf.ones_like(imgs)
+
+    output = cardiac_motion_blur(
+        imgs,
+        img_msks,
+        **_validation_kwargs(
+            num_phases=5,
+            validation_translation_mm_yx=(0.0, 4.0),
+            validation_z_phase_offset=0.5,
+        ),
+    ).numpy()
+
+    assert not np.allclose(output[:, 0], output[:, -1], atol=1e-5)
+    adjacent_difference = np.mean(np.abs(output[:, 1:] - output[:, :-1]))
+    endpoint_difference = np.mean(np.abs(output[:, -1] - output[:, 0]))
+    assert 0 < adjacent_difference < endpoint_difference
 
 
 def test_roi_attenuates_displacement_instead_of_blending_intensities():

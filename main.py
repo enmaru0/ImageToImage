@@ -203,6 +203,52 @@ def read_cfg_and_parse_arg():
                 raise ValueError(
                     "cardiac_motion.roi_sigma_ratio_yxは正の[Y, X]にしてください"
                 )
+            phase_weight_mode = str(getattr(motion_cfg, "phase_weight_mode", "uniform"))
+            if phase_weight_mode not in ["uniform", "bimodal"]:
+                raise ValueError(
+                    "cardiac_motion.phase_weight_modeはuniformまたはbimodalを"
+                    "指定してください"
+                )
+            peak_sigma_range = list(
+                getattr(motion_cfg, "bimodal_peak_sigma_range", [0.2, 0.4])
+            )
+            if (
+                len(peak_sigma_range) != 2
+                or peak_sigma_range[0] <= 0
+                or peak_sigma_range[0] > peak_sigma_range[1]
+            ):
+                raise ValueError(
+                    "cardiac_motion.bimodal_peak_sigma_rangeは0より大きく"
+                    "min <= maxの[min, max]にしてください"
+                )
+            balance_range = list(
+                getattr(motion_cfg, "bimodal_balance_range", [0.35, 0.65])
+            )
+            if (
+                len(balance_range) != 2
+                or balance_range[0] < 0
+                or balance_range[0] > balance_range[1]
+                or balance_range[1] > 1
+            ):
+                raise ValueError(
+                    "cardiac_motion.bimodal_balance_rangeは0-1で"
+                    "min <= maxの[min, max]にしてください"
+                )
+            uniform_mix = float(getattr(motion_cfg, "uniform_phase_weight_mix", 0.1))
+            if not 0 <= uniform_mix <= 1:
+                raise ValueError(
+                    "cardiac_motion.uniform_phase_weight_mixは0-1にしてください"
+                )
+            max_temporal_asymmetry = float(
+                getattr(motion_cfg, "max_temporal_asymmetry", 0.0)
+            )
+            if not 0 <= max_temporal_asymmetry < 0.5:
+                raise ValueError(
+                    "cardiac_motion.max_temporal_asymmetryは0以上0.5未満にしてください"
+                )
+            max_z_phase_offset = float(getattr(motion_cfg, "max_z_phase_offset", 0.0))
+            if not 0 <= max_z_phase_offset <= 1:
+                raise ValueError("cardiac_motion.max_z_phase_offsetは0-1にしてください")
             if len(motion_cfg.validation_translation_mm_yx) != 2:
                 raise ValueError(
                     "cardiac_motion.validation_translation_mm_yxは[Y, X]にしてください"
@@ -210,6 +256,37 @@ def read_cfg_and_parse_arg():
             if abs(motion_cfg.validation_scale_delta) >= 1:
                 raise ValueError(
                     "cardiac_motion.validation_scale_deltaの絶対値は1未満にしてください"
+                )
+            validation_peak_sigma = float(
+                getattr(motion_cfg, "validation_bimodal_peak_sigma", 0.3)
+            )
+            if validation_peak_sigma <= 0:
+                raise ValueError(
+                    "cardiac_motion.validation_bimodal_peak_sigmaは"
+                    "0より大きくしてください"
+                )
+            validation_balance = float(
+                getattr(motion_cfg, "validation_bimodal_balance", 0.5)
+            )
+            if not 0 <= validation_balance <= 1:
+                raise ValueError(
+                    "cardiac_motion.validation_bimodal_balanceは0-1にしてください"
+                )
+            validation_asymmetry = float(
+                getattr(motion_cfg, "validation_temporal_asymmetry", 0.0)
+            )
+            if abs(validation_asymmetry) >= 0.5:
+                raise ValueError(
+                    "cardiac_motion.validation_temporal_asymmetryの絶対値は"
+                    "0.5未満にしてください"
+                )
+            validation_z_offset = float(
+                getattr(motion_cfg, "validation_z_phase_offset", 0.0)
+            )
+            if abs(validation_z_offset) > 1:
+                raise ValueError(
+                    "cardiac_motion.validation_z_phase_offsetの絶対値は"
+                    "1以下にしてください"
                 )
         slice_thickness_cfg = getattr(
             cfg.self_supervised_deblur, "slice_thickness", None

@@ -103,6 +103,44 @@ def _sample_num_phases(batch_size, num_phases, num_phases_range, is_training):
     return min_phases + choice * 2, max_phases
 
 
+def _sample_scalar_range(batch_size, value_range, validation_value, is_training, dtype):
+    """Sample one scalar per volume, or use a reproducible validation value."""
+    if not is_training:
+        return tf.fill((batch_size,), tf.cast(validation_value, dtype))
+
+    min_value, max_value = (float(value) for value in value_range)
+    return tf.random.uniform(
+        (batch_size,), minval=min_value, maxval=max_value, dtype=dtype
+    )
+
+
+def _phase_weight(
+    phase_position,
+    active,
+    phase_weight_mode,
+    bimodal_peak_sigma,
+    bimodal_balance,
+    uniform_phase_weight_mix,
+):
+    """Return per-volume exposure weights for one simulated cardiac phase."""
+    dtype = phase_position.dtype
+    if phase_weight_mode == "uniform":
+        weight = tf.ones_like(phase_position)
+    elif phase_weight_mode == "bimodal":
+        sigma = tf.maximum(bimodal_peak_sigma, tf.cast(1e-3, dtype))
+        negative_peak = tf.exp(-0.5 * tf.square((phase_position + 1.0) / sigma))
+        positive_peak = tf.exp(-0.5 * tf.square((phase_position - 1.0) / sigma))
+        bimodal = (
+            bimodal_balance * negative_peak + (1.0 - bimodal_balance) * positive_peak
+        )
+        uniform_mix = tf.cast(uniform_phase_weight_mix, dtype)
+        weight = (1.0 - uniform_mix) * bimodal + uniform_mix
+    else:
+        raise ValueError(f"Unsupported phase_weight_mode: {phase_weight_mode}")
+
+    return weight * tf.cast(active, dtype)
+
+
 def _localize_displacement(grid_y, grid_x, transformed_y, transformed_x, roi_weight):
     """Attenuate the displacement field, not the warped image intensity."""
     roi_weight = tf.squeeze(roi_weight, axis=-1)
@@ -122,19 +160,31 @@ def cardiac_motion_blur(
     max_scale_delta=0.04,
     roi_center_yx=(0.5, 0.5),
     roi_sigma_ratio_yx=(0.25, 0.25),
+    phase_weight_mode="uniform",
+    bimodal_peak_sigma_range=(0.2, 0.4),
+    bimodal_balance_range=(0.35, 0.65),
+    uniform_phase_weight_mix=0.1,
+    max_temporal_asymmetry=0.0,
+    max_z_phase_offset=0.0,
     validation_translation_mm_yx=(2.0, -2.0),
     validation_rotation_deg=2.0,
     validation_scale_delta=0.025,
+    validation_bimodal_peak_sigma=0.3,
+    validation_bimodal_balance=0.5,
+    validation_temporal_asymmetry=0.0,
+    validation_z_phase_offset=0.0,
     is_training=True,
 ):
     """Approximate cardiac CT motion by averaging smooth in-plane heart motion.
 
-    The same transform is applied to every Z slice, preventing independently
-    sampled slice jitter. A Gaussian ROI attenuates the displacement field so
-    each phase contains one continuously deformed image rather than an intensity
-    blend of original and moved contours. Warped values are normalized by a
-    warped validity mask so padding does not create a dark edge that the model
-    could learn to overshoot.
+    Phase weights can emphasize two separated cardiac states to create double
+    contours. Temporal asymmetry produces a non-uniform trajectory, while a
+    smooth Z phase offset approximates the phase drift of a helical non-gated
+    acquisition. A Gaussian ROI attenuates the displacement field so each phase
+    contains one continuously deformed image rather than an intensity blend of
+    original and moved contours. Warped values are normalized by a warped
+    validity mask so padding does not create a dark edge that the model could
+    learn to overshoot.
     """
     imgs = tf.convert_to_tensor(imgs)
     img_msks = tf.cast(img_msks, imgs.dtype)
@@ -144,10 +194,8 @@ def cardiac_motion_blur(
     height = tf.shape(imgs)[2]
     width = tf.shape(imgs)[3]
 
-    # Treat Z as channels so one in-plane transform is shared by all slices.
-    imgs_2d = tf.transpose(tf.squeeze(imgs, axis=-1), (0, 2, 3, 1))
-    msks_2d = tf.transpose(tf.squeeze(img_msks, axis=-1), (0, 2, 3, 1))
-    image_and_mask = tf.concat([imgs_2d * msks_2d, msks_2d], axis=-1)
+    image_and_mask = tf.concat([imgs * img_msks, img_msks], axis=-1)
+    image_and_mask = tf.reshape(image_and_mask, (-1, height, width, 2))
 
     y = tf.cast(tf.range(height), dtype)
     x = tf.cast(tf.range(width), dtype)
@@ -183,10 +231,43 @@ def cardiac_motion_blur(
     )
     translation_y = translation_px[:, 0, None, None]
     translation_x = translation_px[:, 1, None, None]
-    rotation_rad = rotation_rad[:, None, None]
-    scale_delta = scale_delta[:, None, None]
+    rotation_rad = rotation_rad[:, None]
+    scale_delta = scale_delta[:, None]
 
-    accumulated = tf.zeros_like(imgs_2d)
+    bimodal_peak_sigma = _sample_scalar_range(
+        batch_size,
+        bimodal_peak_sigma_range,
+        validation_bimodal_peak_sigma,
+        is_training,
+        dtype,
+    )
+    bimodal_balance = _sample_scalar_range(
+        batch_size,
+        bimodal_balance_range,
+        validation_bimodal_balance,
+        is_training,
+        dtype,
+    )
+    if is_training:
+        temporal_asymmetry = tf.random.uniform(
+            (batch_size,), -max_temporal_asymmetry, max_temporal_asymmetry, dtype=dtype
+        )
+        z_phase_offset = tf.random.uniform(
+            (batch_size,), -max_z_phase_offset, max_z_phase_offset, dtype=dtype
+        )
+    else:
+        temporal_asymmetry = tf.fill(
+            (batch_size,), tf.cast(validation_temporal_asymmetry, dtype)
+        )
+        z_phase_offset = tf.fill(
+            (batch_size,), tf.cast(validation_z_phase_offset, dtype)
+        )
+
+    z_position = tf.linspace(tf.cast(-1.0, dtype), tf.cast(1.0, dtype), depth)
+    z_position = z_position[None]
+
+    accumulated = tf.zeros_like(imgs)
+    accumulated_weight = tf.zeros((batch_size, 1, 1, 1, 1), dtype=dtype)
     phase_counts, max_loop_phases = _sample_num_phases(
         batch_size, num_phases, num_phases_range, is_training
     )
@@ -195,28 +276,49 @@ def cardiac_motion_blur(
         active = phase_index < phase_counts
         bounded_index = tf.minimum(phase_index, phase_counts - 1)
         phase_position = -1.0 + 2.0 * tf.cast(bounded_index, dtype) / phase_denominator
-        phase_position = phase_position[:, None, None]
-        angle = phase_position * rotation_rad
-        scale = 1.0 + phase_position * scale_delta
+        phase_weights = _phase_weight(
+            phase_position,
+            active,
+            phase_weight_mode,
+            bimodal_peak_sigma,
+            bimodal_balance,
+            uniform_phase_weight_mix,
+        )
+
+        # The phase changes smoothly, rather than independently, along Z.
+        phase_position_z = tf.clip_by_value(
+            phase_position[:, None] + z_position * z_phase_offset[:, None], -1.0, 1.0
+        )
+        # Keep both endpoints fixed while bending the trajectory between them.
+        motion_position = phase_position_z + temporal_asymmetry[:, None] * (
+            tf.square(phase_position_z) - 1.0
+        )
+        motion_position = motion_position[:, :, None, None]
+
+        angle = motion_position * rotation_rad[:, :, None, None]
+        scale = 1.0 + motion_position * scale_delta[:, :, None, None]
         cos_angle = tf.cos(angle) / scale
         sin_angle = tf.sin(angle) / scale
 
-        shifted_x = grid_x - center_x - phase_position * translation_x
-        shifted_y = grid_y - center_y - phase_position * translation_y
+        shifted_x = grid_x[None] - center_x - motion_position * translation_x[:, None]
+        shifted_y = grid_y[None] - center_y - motion_position * translation_y[:, None]
         transformed_x = cos_angle * shifted_x + sin_angle * shifted_y + center_x
         transformed_y = -sin_angle * shifted_x + cos_angle * shifted_y + center_y
         source_y, source_x = _localize_displacement(
-            grid_y, grid_x, transformed_y, transformed_x, roi_weight
+            grid_y[None], grid_x[None], transformed_y, transformed_x, roi_weight
         )
 
+        source_y = tf.reshape(source_y, (-1, height, width))
+        source_x = tf.reshape(source_x, (-1, height, width))
         sampled = bilinear_sample_2d(image_and_mask, source_y, source_x)
-        warped_img = sampled[..., :depth]
-        warped_msk = sampled[..., depth:]
+        sampled = tf.reshape(sampled, (batch_size, depth, height, width, 2))
+        warped_img = sampled[..., :1]
+        warped_msk = sampled[..., 1:]
         warped_img = warped_img / tf.maximum(warped_msk, tf.cast(1e-6, dtype))
-        warped_img = tf.where(warped_msk > 1e-6, warped_img, imgs_2d)
-        accumulated += warped_img * tf.cast(active[:, None, None, None], dtype)
+        warped_img = tf.where(warped_msk > 1e-6, warped_img, imgs)
+        phase_weights = phase_weights[:, None, None, None, None]
+        accumulated += warped_img * phase_weights
+        accumulated_weight += phase_weights
 
-    blurred_2d = accumulated / tf.cast(phase_counts[:, None, None, None], dtype)
-    blurred = tf.transpose(blurred_2d, (0, 3, 1, 2))[..., None]
-    blurred = tf.reshape(blurred, (batch_size, depth, height, width, 1))
+    blurred = accumulated / tf.maximum(accumulated_weight, tf.cast(1e-6, dtype))
     return tf.clip_by_value(blurred, 0.0, 1.0) * img_msks
