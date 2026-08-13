@@ -103,6 +103,14 @@ def _sample_num_phases(batch_size, num_phases, num_phases_range, is_training):
     return min_phases + choice * 2, max_phases
 
 
+def _localize_displacement(grid_y, grid_x, transformed_y, transformed_x, roi_weight):
+    """Attenuate the displacement field, not the warped image intensity."""
+    roi_weight = tf.squeeze(roi_weight, axis=-1)
+    source_y = grid_y + roi_weight * (transformed_y - grid_y)
+    source_x = grid_x + roi_weight * (transformed_x - grid_x)
+    return source_y, source_x
+
+
 def cardiac_motion_blur(
     imgs,
     img_msks,
@@ -122,9 +130,11 @@ def cardiac_motion_blur(
     """Approximate cardiac CT motion by averaging smooth in-plane heart motion.
 
     The same transform is applied to every Z slice, preventing independently
-    sampled slice jitter. A Gaussian ROI blends the motion into the stationary
-    surroundings. Warped values are normalized by a warped validity mask so
-    padding does not create a dark edge that the model could learn to overshoot.
+    sampled slice jitter. A Gaussian ROI attenuates the displacement field so
+    each phase contains one continuously deformed image rather than an intensity
+    blend of original and moved contours. Warped values are normalized by a
+    warped validity mask so padding does not create a dark edge that the model
+    could learn to overshoot.
     """
     imgs = tf.convert_to_tensor(imgs)
     img_msks = tf.cast(img_msks, imgs.dtype)
@@ -193,16 +203,18 @@ def cardiac_motion_blur(
 
         shifted_x = grid_x - center_x - phase_position * translation_x
         shifted_y = grid_y - center_y - phase_position * translation_y
-        source_x = cos_angle * shifted_x + sin_angle * shifted_y + center_x
-        source_y = -sin_angle * shifted_x + cos_angle * shifted_y + center_y
+        transformed_x = cos_angle * shifted_x + sin_angle * shifted_y + center_x
+        transformed_y = -sin_angle * shifted_x + cos_angle * shifted_y + center_y
+        source_y, source_x = _localize_displacement(
+            grid_y, grid_x, transformed_y, transformed_x, roi_weight
+        )
 
         sampled = bilinear_sample_2d(image_and_mask, source_y, source_x)
         warped_img = sampled[..., :depth]
         warped_msk = sampled[..., depth:]
         warped_img = warped_img / tf.maximum(warped_msk, tf.cast(1e-6, dtype))
         warped_img = tf.where(warped_msk > 1e-6, warped_img, imgs_2d)
-        phase_img = roi_weight * warped_img + (1.0 - roi_weight) * imgs_2d
-        accumulated += phase_img * tf.cast(active[:, None, None, None], dtype)
+        accumulated += warped_img * tf.cast(active[:, None, None, None], dtype)
 
     blurred_2d = accumulated / tf.cast(phase_counts[:, None, None, None], dtype)
     blurred = tf.transpose(blurred_2d, (0, 3, 1, 2))[..., None]

@@ -3,7 +3,11 @@ import tensorflow as tf
 from omegaconf import OmegaConf
 
 from trainer import CustomModel
-from .cardiac_motion import _sample_num_phases, cardiac_motion_blur
+from .cardiac_motion import (
+    _localize_displacement,
+    _sample_num_phases,
+    cardiac_motion_blur,
+)
 
 
 def _validation_kwargs(**overrides):
@@ -82,6 +86,21 @@ def test_random_num_phases_uses_only_odd_values_and_validation_is_fixed():
     )
     assert max_loop_phases == 5
     np.testing.assert_array_equal(validation_counts.numpy(), np.full(8, 5))
+
+
+def test_roi_attenuates_displacement_instead_of_blending_intensities():
+    grid_y = tf.constant([[[0.0, 1.0, 2.0]]])
+    grid_x = tf.constant([[[2.0, 3.0, 4.0]]])
+    transformed_y = grid_y + 4.0
+    transformed_x = grid_x - 2.0
+    roi_weight = tf.constant([[[[0.0], [0.25], [1.0]]]])
+
+    source_y, source_x = _localize_displacement(
+        grid_y, grid_x, transformed_y, transformed_x, roi_weight
+    )
+
+    np.testing.assert_allclose(source_y.numpy(), [[[0.0, 2.0, 6.0]]])
+    np.testing.assert_allclose(source_x.numpy(), [[[2.0, 2.5, 2.0]]])
 
 
 def test_self_supervised_source_is_created_from_clean_target():

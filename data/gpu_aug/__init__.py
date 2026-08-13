@@ -12,6 +12,7 @@ from .random_noise import (
     random_gaussian_noise,
     random_sharpness,
 )
+from .slice_thickness import simulate_slice_thickness
 
 __all__ = [
     "cardiac_motion_blur",
@@ -29,4 +30,5 @@ __all__ = [
     "random_gaussian_filter_single",
     "random_gaussian_noise",
     "random_sharpness",
+    "simulate_slice_thickness",
 ]

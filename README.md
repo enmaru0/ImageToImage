@@ -74,6 +74,8 @@ self_supervised_deblur:
   ランダムに選びます。validationでは再現性のため `num_phases` を固定使用します。
 - `roi_center_yx` はcrop内の心臓中心、`roi_sigma_ratio_yx` はmotion範囲を
   Y/Xサイズに対する比率で指定します。
+- ROI重みは元画像と変形画像の画素値混合には使わず、変位ベクトルを外側へ
+  滑らかに減衰させます。各時相には単一の連続した変形画像だけが生成されます。
 - 全Zスライスに同じ心拍軌跡を適用し、スライスごとのランダムな位置ずれは
   発生させません。
 - padding境界はwarped maskで正規化し、ゼロ値の混入による暗い縁と
@@ -84,6 +86,36 @@ self_supervised_deblur:
 これは画像空間の近似なので、CT投影角ごとのmotionに由来するstreak artifactを
 完全には再現しません。実データに合わせる際は、TensorBoardの `Source Images` と
 `Target Images` を比較し、移動量とROIを調整してください。
+
+### スライス厚の追加劣化
+
+`slice_thickness.enabled: true` は `degradation_type` と独立して適用されるため、
+Gaussian、cardiac motion、または両方と併用できます。例えばclean画像の
+スライス厚が3 mmで、5 mm相当へ劣化させてから元の3 mm格子へ線形補間する場合は
+次のように設定します。
+
+```yaml
+self_supervised_deblur:
+  degradation_type: gaussian # cardiac_motionなども使用可能
+  slice_thickness:
+    enabled: true
+    clean_thickness_mm: 3.0
+    degraded_thickness_mm: 5.0
+    gaussian_truncate: 3.0
+```
+
+処理は次の順序です。
+
+```text
+既存degradation
+  → Z方向Gaussian（3 mmから5 mmへ広げる追加PSF）
+  → 5 mm間隔でサンプリング
+  → 元の3 mm格子へ線形補間
+```
+
+Gaussianのslice sensitivity profileを仮定し、追加GaussianのFWHMは
+`sqrt(5² - 3²) = 4 mm` として計算します。出力のshapeとspacingはclean画像から
+変わりません。合成結果は `debug_dataloader.py` のcomparisonで確認できます。
 
 データ配置は、ルート直下に `.hdr/.raw` を置くか、`train` / `val` に分けます。自己教師ありモードでは各ディレクトリ以下を再帰探索するため、spacingなどでさらにサブフォルダへ分けても利用できます。
 

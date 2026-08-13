@@ -211,6 +211,26 @@ def read_cfg_and_parse_arg():
                 raise ValueError(
                     "cardiac_motion.validation_scale_deltaの絶対値は1未満にしてください"
                 )
+        slice_thickness_cfg = getattr(
+            cfg.self_supervised_deblur, "slice_thickness", None
+        )
+        if slice_thickness_cfg is not None and slice_thickness_cfg.enabled:
+            if slice_thickness_cfg.clean_thickness_mm <= 0:
+                raise ValueError(
+                    "slice_thickness.clean_thickness_mmは0より大きくしてください"
+                )
+            if (
+                slice_thickness_cfg.degraded_thickness_mm
+                <= slice_thickness_cfg.clean_thickness_mm
+            ):
+                raise ValueError(
+                    "slice_thickness.degraded_thickness_mmは"
+                    "clean_thickness_mmより大きくしてください"
+                )
+            if slice_thickness_cfg.gaussian_truncate <= 0:
+                raise ValueError(
+                    "slice_thickness.gaussian_truncateは0より大きくしてください"
+                )
     return cfg
 
 

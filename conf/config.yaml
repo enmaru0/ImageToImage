@@ -129,6 +129,12 @@ self_supervised_deblur:
     validation_translation_mm_yx: [2.0,-2.0]
     validation_rotation_deg: 2.0
     validation_scale_delta: 0.025
+  # degradation_typeとは独立に併用できるZ方向のスライス厚劣化
+  slice_thickness:
+    enabled: False
+    clean_thickness_mm: 3.0
+    degraded_thickness_mm: 5.0
+    gaussian_truncate: 3.0
 
 i2i_rfr:
   p: 1.0 # 論文デフォルト: L1

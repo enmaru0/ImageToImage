@@ -14,6 +14,7 @@ from data.gpu_aug import (
     random_gaussian_filter,
     random_gamma_correction,
     random_normalize,
+    simulate_slice_thickness,
 )
 
 
@@ -351,6 +352,16 @@ class CustomModel(Model):
                 imgs = gaussian_filter(
                     imgs, sigma=float(cfg.self_supervised_deblur.validation_sigma)
                 )
+        slice_thickness_cfg = getattr(
+            cfg.self_supervised_deblur, "slice_thickness", None
+        )
+        if slice_thickness_cfg is not None and slice_thickness_cfg.enabled:
+            imgs = simulate_slice_thickness(
+                imgs,
+                img_msks,
+                spacing_mm_z=cfg.aug.affine.norm_spacing_zyx[0],
+                **slice_thickness_cfg,
+            )
         return imgs * img_msks
 
     def _get_metrics_result(self):
