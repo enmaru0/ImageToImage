@@ -12,7 +12,6 @@ from .dataloader_utils import (
     get_center,
     load_intensity,
     load_organ_box,
-    random_crop_center_within_bb,
     save_intensity,
     save_organ_box,
 )
@@ -30,16 +29,14 @@ from .utils import (
 def preprocess_image_np(
     img_hdr_list_with_data_name: list[bytes], is_training: bool, cfg
 ):
-    img_hdr_path, target_hdr_path, dataname = img_hdr_list_with_data_name
-    dataname = dataname.decode()
+    img_hdr_path, target_hdr_path, _ = img_hdr_list_with_data_name
     img_hdr_path = Path(img_hdr_path.decode())
     target_hdr_path = Path(target_hdr_path.decode())
 
     crop_size_zyx = cfg.aug.crop_size_zyx
-    organ_hdr_path = img_hdr_path.with_suffix(".prostate.mask.hdr")
-    organ_box_path = img_hdr_path.with_suffix(
-        ".prostate.box.txt"
-    )  # save_organ_boxで作成
+    # <image>.mask.hdrのheart_bitに心臓マスクが入っている。
+    organ_hdr_path = img_hdr_path.with_suffix(".mask.hdr")
+    organ_box_path = img_hdr_path.with_suffix(".heart.box.txt")
     body_box_path = img_hdr_path.with_suffix(".body.box.txt")  # save_organ_boxで作成
 
     img_size_zyx, img_dtype, spacing_zyx = read_hdr(img_hdr_path)
@@ -61,30 +58,19 @@ def preprocess_image_np(
         load_organ_box(organ_box_path) if organ_box_path.exists() else body_box_zyxzyx
     )
 
-    # クロップ中心を決める
-    if "_np" in dataname:
-        # 前立腺がないデータ
-        crop_center_zyx = random_crop_center_within_bb(
-            body_box_zyxzyx,
-            img_size_zyx,
-            crop_size_zyx,
-            spacing_zyx,
-            cfg.aug.affine.norm_spacing_zyx,
-            [0, 0, 0],
-        )
-    else:
-        crop_center_zyx = get_center(
-            img_size_zyx,
-            spacing_zyx,
-            is_training,
-            body_box_zyxzyx,
-            organ_box_zyxzyx,
-            cfg.aug.random_crop_method,
-            crop_size_zyx,
-            cfg.aug.affine.norm_spacing_zyx,
-            cfg.aug.margin,
-            cfg.aug.crop_keep_ratio,
-        )
+    # 心臓boxがない場合はorgan_box_zyxzyxがbody boxへフォールバックする。
+    crop_center_zyx = get_center(
+        img_size_zyx,
+        spacing_zyx,
+        is_training,
+        body_box_zyxzyx,
+        organ_box_zyxzyx,
+        cfg.aug.random_crop_method,
+        crop_size_zyx,
+        cfg.aug.affine.norm_spacing_zyx,
+        cfg.aug.margin,
+        cfg.aug.crop_keep_ratio,
+    )
 
     # アフィン変換のためのインスタンスを作成
     affine_transform = AffineTransform(crop_size_zyx=crop_size_zyx, **cfg.aug.affine)
@@ -117,11 +103,11 @@ def preprocess_image_np(
         use_memmap=True,
     )
 
-    if "_np" in dataname or not organ_hdr_path.exists():
-        # 前立腺がないデータ
+    if not organ_hdr_path.exists():
+        # 心臓マスクがないデータ。motion生成時はGaussian ROIへfallbackする。
         msk = np.zeros_like(img, np.uint16)
     else:
-        # ここでは0bitに対象マスクが入っているとする
+        # 心臓bitを含むbit mask全体を保持し、GPU側でも利用する。
         msk = read_re4(
             organ_hdr_path,
             clip_zyxzyx=img_region_zyxzyx,
@@ -327,13 +313,15 @@ def create_dataloader(img_hdr_dict: dict, is_training: bool, cfg):
             ):
                 pass
 
-        # マスクがある場合は、従来通りcrop中心決定用の矩形を計算しておく。
-        if any(
-            path.with_suffix(".prostate.mask.hdr").exists()
-            for path in source_hdr_path_list
-        ):
-            func = partial(save_organ_box, suffix=".prostate")
-            _run(func, "saving prostate box")
+        # bit 6の心臓マスクからcrop中心決定用の矩形を計算しておく。
+        if any(path.with_suffix(".mask.hdr").exists() for path in source_hdr_path_list):
+            func = partial(
+                save_organ_box,
+                suffix="",
+                src_bit=int(cfg.bit_info.heart_bit),
+                box_suffix=".heart",
+            )
+            _run(func, "saving heart box")
 
         if any(
             path.with_suffix(".body.mask.hdr").exists() for path in source_hdr_path_list

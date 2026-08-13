@@ -21,18 +21,21 @@ def load_organ_box(organ_box_path):
     return np.array(list(map(int, organ_box_str.split(","))))
 
 
-def save_organ_box(img_hdr_path: str, suffix):
-    assert suffix.startswith("."), "suffix must start with ."
+def save_organ_box(img_hdr_path: str, suffix, src_bit=0, box_suffix=None):
+    assert suffix == "" or suffix.startswith("."), "suffix must start with ."
     img_hdr_path = Path(img_hdr_path)
     msk_hdr_path = img_hdr_path.with_suffix(suffix + ".mask.hdr")
-    save_path = msk_hdr_path.parent / msk_hdr_path.name.replace(".mask.hdr", ".box.txt")
+    if box_suffix is None:
+        box_suffix = suffix
+    assert box_suffix.startswith("."), "box_suffix must start with ."
+    save_path = img_hdr_path.with_suffix(box_suffix + ".box.txt")
     if save_path.exists():
         return save_path
 
     if not msk_hdr_path.exists():
         logging.warning(f"{msk_hdr_path} not found")
         return
-    msk = read_re4(msk_hdr_path, src_dst_bit_dict={0: 0})
+    msk = read_re4(msk_hdr_path, src_dst_bit_dict={src_bit: 0})
     if msk.sum() == 0:
         logging.error(f"Empty Mask: {msk_hdr_path}")
         sys.exit()

@@ -7,6 +7,7 @@ from .cardiac_motion import (
     _localize_displacement,
     _phase_weight,
     _sample_num_phases,
+    _soften_motion_mask,
     cardiac_motion_blur,
 )
 
@@ -155,6 +156,45 @@ def test_center_preserving_keeps_asymmetric_double_edge_centered():
 
     np.testing.assert_allclose(centered_x.numpy(), 32.0, atol=0.05)
     assert abs(float(centered_x) - 32.0) < abs(float(uncentered_x) - 32.0)
+
+
+def test_heart_mask_localizes_motion_and_softening_keeps_z_slices_separate():
+    rng = np.random.default_rng(5)
+    imgs = tf.constant(rng.random((1, 2, 32, 32, 1)), tf.float32)
+    img_msks = tf.ones_like(imgs)
+    heart_msks = np.zeros(imgs.shape, np.float32)
+    heart_msks[:, :, 8:24, 8:24] = 1.0
+    heart_msks = tf.constant(heart_msks)
+
+    output = cardiac_motion_blur(
+        imgs,
+        img_msks,
+        motion_msks=heart_msks,
+        heart_mask_softening_px=0,
+        **_validation_kwargs(num_phases=5, validation_translation_mm_yx=(0.0, 4.0)),
+    )
+
+    outside = tf.cast(heart_msks == 0, tf.float32)
+    inside = heart_msks
+    np.testing.assert_allclose(
+        (output * outside).numpy(), (imgs * outside).numpy(), atol=1e-6
+    )
+    assert float(tf.reduce_sum(tf.abs(output - imgs) * inside)) > 0
+
+    one_slice_mask = tf.concat(
+        [heart_msks[:, :1], tf.zeros_like(heart_msks[:, 1:])], axis=1
+    )
+    softened = _soften_motion_mask(one_slice_mask, softening_px=2)
+    assert float(tf.reduce_max(softened[:, 0])) > 0
+    np.testing.assert_allclose(softened[:, 1].numpy(), 0.0, atol=1e-7)
+
+
+def test_heart_mask_is_extracted_from_bit_six():
+    packed_mask = tf.constant([[[[[0], [1 << 6], [(1 << 6) | (1 << 15)]]]]], tf.uint16)
+
+    heart_mask = CustomModel._get_heart_msks(packed_mask, heart_bit=6)
+
+    np.testing.assert_array_equal(heart_mask.numpy(), [[[[[0.0], [1.0], [1.0]]]]])
 
 
 def test_roi_attenuates_displacement_instead_of_blending_intensities():

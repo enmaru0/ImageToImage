@@ -134,6 +134,9 @@ if __name__ == "__main__":
                         batch["target_min_clip_vals"],
                         batch["target_max_clip_vals"],
                         cfg,
+                        heart_msks=CustomModel._get_heart_msks(
+                            batch["msks"], cfg.bit_info.heart_bit
+                        ),
                     )
                 )
             else:
@@ -148,6 +151,9 @@ if __name__ == "__main__":
                     CustomModel._get_img_msks(batch["msks"], cfg.bit_info.padding_bit),
                     cfg,
                     is_training=False,
+                    heart_msks=CustomModel._get_heart_msks(
+                        batch["msks"], cfg.bit_info.heart_bit
+                    ),
                 )
                 batch["target_imgs"] = CustomModel.normalize_target(
                     batch["target_imgs"],
@@ -197,9 +203,13 @@ if __name__ == "__main__":
                 batch["target_max_clip_vals"],
             )
 
-            msks = ((batch["msks"] & (1 << cfg.bit_info.padding_bit)) == 0).astype(
+            img_msks = ((batch["msks"] & (1 << cfg.bit_info.padding_bit)) == 0).astype(
                 np.float32
             )
-            bit_dict = {0: "img_msks"}
+            heart_msks = ((batch["msks"] & (1 << cfg.bit_info.heart_bit)) > 0).astype(
+                np.float32
+            )
+            msks = np.concatenate([img_msks, heart_msks], axis=-1)
+            bit_dict = {0: "img_msks", 1: "heart_msks"}
 
             save_msks(img_hdr_list, msks, save_dir, spacing_zyx, bit_dict)

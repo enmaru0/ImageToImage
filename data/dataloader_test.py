@@ -48,12 +48,14 @@ def preprocess_image_np_test(img_hdr_list_with_data_name: list[bytes], cfg):
     """
     if target_spacing_zyx[0] > 2:
         msk_hdr_path = img_hdr_path.with_suffix(".body.mask.hdr")
+        msk_bit = 0
         margin = 0
     else:
-        msk_hdr_path = img_hdr_path.with_suffix(".prostate.mask.hdr")
+        msk_hdr_path = img_hdr_path.with_suffix(".mask.hdr")
+        msk_bit = int(cfg.bit_info.heart_bit)
         margin = cfg.aug.margin
 
-    msk = read_re4(msk_hdr_path, src_dst_bit_dict={0: 0}, type_flag="mask")
+    msk = read_re4(msk_hdr_path, src_dst_bit_dict={msk_bit: 0}, type_flag="mask")
     msk = msk[:, :, :, 0].astype(np.bool_)
     crop_zyxzyx = extract_bb(msk, to_open=True)
     margin_mm_zyx, resize_zyx = get_pad_for_margin(

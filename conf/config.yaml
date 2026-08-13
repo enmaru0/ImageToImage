@@ -135,6 +135,8 @@ self_supervised_deblur:
     max_z_phase_offset: 0.35
     # 各voxelの重み付き平均変位を0にし、二重線の中央をclean targetに固定
     center_preserving: True
+    # bit_info.heart_bitの心臓マスク境界をXY方向にsoft化する半径（pixel）
+    heart_mask_softening_px: 6
     # validationでは固定パラメータを使い、症例間比較を再現可能にする
     validation_translation_mm_yx: [2.0,-2.0]
     validation_rotation_deg: 2.0
@@ -173,4 +175,5 @@ image:
     max_percentile: 95 # %
 
 bit_info:
+  heart_bit: 6
   padding_bit: 15

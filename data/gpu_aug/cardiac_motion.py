@@ -149,6 +149,26 @@ def _localize_displacement(grid_y, grid_x, transformed_y, transformed_x, roi_wei
     return source_y, source_x
 
 
+def _soften_motion_mask(motion_msks, softening_px):
+    """Create a soft in-plane motion ROI without mixing adjacent CT slices."""
+    motion_msks = tf.cast(motion_msks > 0, tf.float32)
+    if softening_px <= 0:
+        return motion_msks
+
+    kernel_size = 2 * int(softening_px) + 1
+    # Repeated box filtering approximates a smooth bell-shaped transition and is
+    # inexpensive/XLA-compatible. The Z kernel remains one because slice spacing
+    # is substantially coarser than in-plane spacing.
+    for _ in range(2):
+        motion_msks = tf.nn.avg_pool3d(
+            motion_msks,
+            ksize=(1, 1, kernel_size, kernel_size, 1),
+            strides=(1, 1, 1, 1, 1),
+            padding="SAME",
+        )
+    return tf.clip_by_value(motion_msks, 0.0, 1.0)
+
+
 def _motion_source_coordinates(
     phase_position,
     z_position,
@@ -192,6 +212,7 @@ def cardiac_motion_blur(
     imgs,
     img_msks,
     spacing_mm_yx,
+    motion_msks=None,
     num_phases=5,
     num_phases_range=None,
     max_translation_mm_yx=(3.0, 3.0),
@@ -206,6 +227,7 @@ def cardiac_motion_blur(
     max_temporal_asymmetry=0.0,
     max_z_phase_offset=0.0,
     center_preserving=False,
+    heart_mask_softening_px=6,
     validation_translation_mm_yx=(2.0, -2.0),
     validation_rotation_deg=2.0,
     validation_scale_delta=0.025,
@@ -258,6 +280,20 @@ def cardiac_motion_blur(
             + tf.square((grid_x - center_x) / sigma_x)
         )
     )[..., None]
+    roi_weight = tf.broadcast_to(
+        roi_weight[:, None], (batch_size, depth, height, width, 1)
+    )
+    if motion_msks is not None:
+        motion_msks = tf.cast(motion_msks, dtype) * img_msks
+        soft_motion_msks = tf.cast(
+            _soften_motion_mask(motion_msks, heart_mask_softening_px), dtype
+        )
+        has_heart_mask = tf.reduce_any(
+            motion_msks > 0, axis=(1, 2, 3, 4), keepdims=True
+        )
+        # Keep compatibility with data without a heart mask by using the
+        # configured Gaussian ROI only for those samples.
+        roi_weight = tf.where(has_heart_mask, soft_motion_msks, roi_weight)
 
     translation_px, rotation_rad, scale_delta = _sample_endpoint_parameters(
         batch_size,

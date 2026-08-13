@@ -76,6 +76,11 @@ class CustomModel(Model):
         img_msks = ops.cast(msks & (1 << padding_bit) == 0, "float32")
         return img_msks
 
+    @staticmethod
+    def _get_heart_msks(msks, heart_bit):
+        """Extract the heart ROI stored in the configured bit of the mask."""
+        return ops.cast((msks & (1 << heart_bit)) > 0, "float32")
+
     def train_step(self, data):
         """
         ここのデータ名であったりselfに渡す引数を変えた場合は、
@@ -85,6 +90,7 @@ class CustomModel(Model):
         imgs = data["imgs"]
         msks = data["msks"]
         img_msks = self._get_img_msks(msks, self.cfg.bit_info.padding_bit)
+        heart_msks = self._get_heart_msks(msks, self.cfg.bit_info.heart_bit)
         target_imgs = data["target_imgs"]
 
         min_clip_vals = data["min_clip_vals"]
@@ -101,6 +107,7 @@ class CustomModel(Model):
             target_min_clip_vals,
             target_max_clip_vals,
             self.cfg,
+            heart_msks=heart_msks,
         )
         with GradientTape() as tape:
             t = self.sample_rfr_time(target_imgs, self.cfg)
@@ -221,8 +228,9 @@ class CustomModel(Model):
         imgs = normalize(imgs, min_clip_vals, max_clip_vals)
         imgs = imgs * img_msks
         if apply_self_supervised_blur:
+            heart_msks = self._get_heart_msks(msks, self.cfg.bit_info.heart_bit)
             imgs = self.apply_self_supervised_deblur(
-                imgs, img_msks, self.cfg, is_training=False
+                imgs, img_msks, self.cfg, is_training=False, heart_msks=heart_msks
             )
         preds = self.i2i_rfr_inference(imgs, img_msks, initial_noise=initial_noise)
 
@@ -322,6 +330,7 @@ class CustomModel(Model):
         target_min_clip_vals,
         target_max_clip_vals,
         cfg,
+        heart_msks=None,
     ):
         """Prepare source/target while keeping self-supervised signals aligned."""
         training_mode = str(getattr(cfg, "training_mode", "paired"))
@@ -333,7 +342,7 @@ class CustomModel(Model):
             )
             imgs = tf.identity(target_imgs)
             imgs = cls.apply_self_supervised_deblur(
-                imgs, img_msks, cfg, is_training=True
+                imgs, img_msks, cfg, is_training=True, heart_msks=heart_msks
             )
         else:
             imgs = cls.gpu_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg)
@@ -343,7 +352,7 @@ class CustomModel(Model):
         return imgs, target_imgs
 
     @staticmethod
-    def apply_self_supervised_deblur(imgs, img_msks, cfg, is_training):
+    def apply_self_supervised_deblur(imgs, img_msks, cfg, is_training, heart_msks=None):
         """Synthesize a blurred source while leaving the target unchanged."""
         training_mode = str(getattr(cfg, "training_mode", "paired"))
         if training_mode != "self_supervised_deblur":
@@ -357,6 +366,7 @@ class CustomModel(Model):
                 imgs,
                 img_msks,
                 spacing_mm_yx=cfg.aug.affine.norm_spacing_zyx[1:3],
+                motion_msks=heart_msks,
                 is_training=is_training,
                 **cfg.self_supervised_deblur.cardiac_motion,
             )

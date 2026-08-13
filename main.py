@@ -127,6 +127,8 @@ def read_cfg_and_parse_arg():
     assert cfg.model.num_channel == 1, (
         "現在のI2I-RFR実装は1チャンネル出力を想定しています"
     )
+    if not 0 <= cfg.bit_info.heart_bit < cfg.bit_info.padding_bit:
+        raise ValueError("bit_info.heart_bitは0以上padding_bit未満にしてください")
     gradient_loss_cfg = getattr(cfg.loss, "gradient", None)
     if gradient_loss_cfg is not None and gradient_loss_cfg.weight < 0:
         raise ValueError("loss.gradient.weightは0以上にしてください")
@@ -255,6 +257,13 @@ def read_cfg_and_parse_arg():
             center_preserving = getattr(motion_cfg, "center_preserving", False)
             if not isinstance(center_preserving, bool):
                 raise ValueError("cardiac_motion.center_preservingはboolにしてください")
+            heart_mask_softening_px = int(
+                getattr(motion_cfg, "heart_mask_softening_px", 6)
+            )
+            if heart_mask_softening_px < 0:
+                raise ValueError(
+                    "cardiac_motion.heart_mask_softening_pxは0以上にしてください"
+                )
             if len(motion_cfg.validation_translation_mm_yx) != 2:
                 raise ValueError(
                     "cardiac_motion.validation_translation_mm_yxは[Y, X]にしてください"
