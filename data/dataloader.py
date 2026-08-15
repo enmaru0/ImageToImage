@@ -304,7 +304,13 @@ def make_batch_dict(
     return data
 
 
-def create_dataloader(img_hdr_dict: dict, is_training: bool, cfg):
+def create_dataloader(
+    img_hdr_dict: dict,
+    is_training: bool,
+    cfg,
+    batch_size: int | None = None,
+    drop_remainder: bool = True,
+):
     """
     複数のデータセットから異なる確率で読み込むデータローダーを作成する
     ミニバッチに必ず特定のデータセットが含まれるような実装にはしていないが、それほど問題にならないはず。
@@ -405,8 +411,9 @@ def create_dataloader(img_hdr_dict: dict, is_training: bool, cfg):
         _preprocess_image, num_parallel_calls=cfg.num_workers
     )  # autotuneはなんか遅かった・・・
 
-    # jitを使うのでdrop_remainder=Trueにする
-    dataset = dataset.batch(cfg.batch_size, drop_remainder=True)
+    # 学習・validationはjit用にdrop_remainder=True、画像ログは端数batchも許可する。
+    batch_size = int(cfg.batch_size) if batch_size is None else int(batch_size)
+    dataset = dataset.batch(batch_size, drop_remainder=drop_remainder)
 
     # 他で使いやすいように辞書型で保持する
     def _make_batch_dict(*args):

@@ -35,6 +35,41 @@ def get_training_mode(cfg):
     return str(getattr(cfg, "training_mode", "paired"))
 
 
+def prepare_unpaired_data_dict(data_dir):
+    """Build a source-only image dictionary for inference image logging."""
+    test_dict = defaultdict(dict)
+    for test_data_dir in _to_path_list(data_dir):
+        if not test_data_dir.is_dir():
+            raise FileNotFoundError(f"test_data_dirが見つかりません: {test_data_dir}")
+
+        image_pairs = []
+        for raw_path in sorted(test_data_dir.rglob("*.raw")):
+            if raw_path.name.endswith(".mask.raw"):
+                continue
+            hdr_path = raw_path.with_suffix(".hdr")
+            if not hdr_path.exists():
+                logging.warning(f"test画像のhdrがないためスキップします: {raw_path}")
+                continue
+            # 既存DataLoaderの幾何・強度前処理を再利用するため、target欄にも
+            # sourceを設定する。test callbackはtargetやmetricを参照しない。
+            image_pairs.append((hdr_path, hdr_path))
+
+        if not image_pairs:
+            raise FileNotFoundError(
+                f"{test_data_dir} 以下に使用可能なtest .hdr/.raw画像が見つかりません"
+            )
+
+        data_name = test_data_dir.name
+        suffix = 1
+        while data_name in test_dict:
+            data_name = f"{test_data_dir.name}_{suffix}"
+            suffix += 1
+        test_dict[data_name]["img_hdr_list"] = image_pairs
+        test_dict[data_name]["freq"] = -1
+
+    return test_dict
+
+
 def read_cfg_and_parse_arg():
     # コマンドライン引数と設定ファイルを読み込む関数
     parser = argparse.ArgumentParser()
@@ -78,6 +113,15 @@ def read_cfg_and_parse_arg():
         target_data_dirs = source_data_dirs
     cfg.restore = Path(cfg.restore) if cfg.restore else None
     cfg.finetune = Path(cfg.finetune) if cfg.finetune else None
+
+    if cfg.test_data_dir:
+        test_data_dirs = _to_path_list(cfg.test_data_dir)
+        for test_data_dir in test_data_dirs:
+            if not test_data_dir.is_dir():
+                raise FileNotFoundError(
+                    f"test_data_dirが見つかりません: {test_data_dir}"
+                )
+        cfg.test_data_dir = _to_config_path(test_data_dirs)
 
     if cfg.restore and cfg.finetune:
         raise ValueError("restoreとfinetuneの両方を指定することはできません")
@@ -129,6 +173,8 @@ def read_cfg_and_parse_arg():
     )
     if not 0 <= cfg.bit_info.heart_bit < cfg.bit_info.padding_bit:
         raise ValueError("bit_info.heart_bitは0以上padding_bit未満にしてください")
+    if cfg.test_image_log.max_images < 1:
+        raise ValueError("test_image_log.max_imagesは1以上にしてください")
     foreground_crop_cfg = getattr(cfg.aug, "foreground_crop", None)
     if foreground_crop_cfg is not None and foreground_crop_cfg.enabled:
         if foreground_crop_cfg.min_voxels_per_slice < 1:
@@ -592,6 +638,24 @@ if __name__ == "__main__":
     # トレーニングおよび検証用のDataLoaderを作成
     train_loader = create_dataloader(train_dict, is_training=True, cfg=cfg)
     val_loader = create_dataloader(val_dict, is_training=False, cfg=cfg)
+    test_log_data = None
+    if cfg.test_data_dir:
+        test_dict = prepare_unpaired_data_dict(cfg.test_data_dir)
+        num_test_images = sum(
+            len(value["img_hdr_list"]) for value in test_dict.values()
+        )
+        test_batch_size = min(int(cfg.test_image_log.max_images), num_test_images)
+        test_loader = create_dataloader(
+            test_dict,
+            is_training=False,
+            cfg=cfg,
+            batch_size=test_batch_size,
+            drop_remainder=False,
+        )
+        test_log_data = next(iter(test_loader))
+        logging.info(
+            f"TensorBoard test image log: {test_batch_size}/{num_test_images} images"
+        )
 
     # モデルを作成
     input_shape = tuple(cfg.aug.crop_size_zyx) + (
@@ -631,7 +695,13 @@ if __name__ == "__main__":
 
     # 検証用データの1バッチ分をTensorBoardに記録するコールバック
     image_logger_callback = ImageLogger(
-        val_data=next(iter(val_loader)), log_dir=tensorboard_dir, jit_compile=True
+        val_data=next(iter(val_loader)),
+        log_dir=tensorboard_dir,
+        jit_compile=True,
+        test_data=test_log_data,
+        test_seed=int(cfg.test_image_log.seed),
+        num_output_channels=int(cfg.model.num_channel),
+        max_test_images=int(cfg.test_image_log.max_images),
     )
 
     # ModelCheckpoint コールバックを設定

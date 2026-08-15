@@ -7,6 +7,11 @@ exp_dir: results/test
 training_mode: paired
 source_data_dir: datasets_source
 target_data_dir: datasets_target # self_supervised_deblurでは指定不要（sourceを再利用）
+# 正解なしtest画像を学習中にTensorBoardへ記録する場合に指定（空文字で無効）
+test_data_dir: ""
+test_image_log:
+  max_images: 3
+  seed: 0 # epoch間の比較用にI2I-RFR初期ノイズを固定
 num_train_steps: 1000000
 eval_every: 1000
 num_workers: 4

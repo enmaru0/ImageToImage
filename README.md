@@ -382,6 +382,27 @@ aug:
 python main.py
 ```
 
+### 正解なしtest画像のTensorBoardログ
+
+正解画像のない実データを学習中に定点観測する場合は、`test_data_dir`を
+指定します。フォルダ以下の`.hdr/.raw`画像を再帰的に検索します。
+
+```bash
+python main.py --overrides \
+  test_data_dir=datasets_non_gated_test \
+  test_image_log.max_images=3 \
+  test_image_log.seed=0
+```
+
+各validation時に、TensorBoardへ次の画像が記録されます。
+
+- `Test/Source Images`: test入力の中央Zスライス（初回のみ）
+- `Test/Translated Images`: 推論結果の中央Zスライス
+
+test画像は損失やvalidation metricには使用されません。また、epoch間でモデルの
+変化だけを比較できるように、I2I-RFRの初期ノイズは`seed`で固定されます。
+`test_data_dir: ""`のときは無効です。
+
 実験ごとに設定を変える場合は、`--overrides` を使います。
 
 ```bash
