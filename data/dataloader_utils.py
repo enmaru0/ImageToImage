@@ -66,6 +66,23 @@ def load_intensity(intensity_path):
     return min_intensity, max_intensity
 
 
+def has_foreground_in_every_z_slice(msk, foreground_bit, min_voxels_per_slice=1):
+    """Return whether every Z slice contains enough voxels of a packed mask bit."""
+    if foreground_bit < 0:
+        raise ValueError("foreground_bit must be non-negative")
+    if min_voxels_per_slice < 1:
+        raise ValueError("min_voxels_per_slice must be at least 1")
+
+    foreground = (np.asarray(msk) & (1 << foreground_bit)) > 0
+    if foreground.ndim == 4 and foreground.shape[-1] == 1:
+        foreground = foreground[..., 0]
+    if foreground.ndim != 3:
+        raise ValueError(f"msk must have shape [Z,Y,X] or [Z,Y,X,1]: {msk.shape}")
+
+    voxels_per_slice = np.count_nonzero(foreground, axis=(1, 2))
+    return bool(np.all(voxels_per_slice >= min_voxels_per_slice))
+
+
 def get_center(
     img_size_zyx,
     img_spacing_zyx,

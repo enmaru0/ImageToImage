@@ -24,7 +24,7 @@ restore: "" # 実験を再開する場合はここにチェックポイントの
 finetune: "" # 事前学習済みモデルを指定する場合はここにパスを指定
 
 model:
-  name: unet
+  name: unet # unet / pix2pix_generator
   input_num_channel: 1
   num_channel: 1 # target image channels
   unet:
@@ -44,6 +44,17 @@ model:
     up_kernel_size_zyx: [1,4,4]
     up_strides_zyx: [1,2,2]
     resize_conv_kernel_size_zyx: [1,3,3] # resize_conv用
+  # Pix2Pix Generatorのblock構成を3D CT向けに軽量化したモデル
+  pix2pix_generator:
+    start_ch: 16
+    depth: 4
+    max_ch: 128
+    down_kernel_size_zyx: [1,4,4]
+    strides_zyx: [1,2,2] # Z方向をdownsampleしない
+    up_kernel_size_zyx: [1,4,4]
+    dropout_depth: 2 # bottleneckに近いdecoder blockでdropout
+    dropout_rate: 0.3
+    leaky_relu_alpha: 0.2
   # 通常のbatch normを使う場合はr_maxを1、d_maxを0としてください
   renorm:
     r_max: 1.0 # 1 for batch norm
@@ -107,6 +118,12 @@ aug:
     image: 0.0
   margin: 15 # mm 臓器内でクロップ範囲を決める際のマージン
   crop_keep_ratio: 0.3 # organ_cropのときにどれくらい元領域を残すか
+
+  # 学習cropの全Zスライスに心臓マスク(bit_info.heart_bit)が残るまで再抽選する
+  foreground_crop:
+    enabled: true
+    min_voxels_per_slice: 1
+    max_attempts: 20
 
 # 単一ディレクトリの画像をclean targetとし、入力側に合成blurを加える設定
 self_supervised_deblur:

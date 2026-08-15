@@ -268,6 +268,54 @@ python main.py --overrides \
 この場合はそれぞれ`downsample_type=stride_conv`、
 `upsample_type=resize_conv`として扱われます。
 
+### 軽量Pix2Pix Generator
+
+`model.name=pix2pix_generator`を指定すると、既存U-Netの代わりに軽量な
+Pix2Pix風Generatorを使用できます。I2I-RFRの入出力とlossは共通なので、
+ネットワーク形状だけを比較できます。
+
+```bash
+python main.py --overrides \
+  model.name=pix2pix_generator \
+  exp_dir=results/pix2pix_generator
+```
+
+標準設定は、Encoderを`Conv3D(kernel=[1,4,4], stride=[1,2,2]) + LeakyReLU`、
+Decoderを`Conv3DTranspose + ReLU + skip connection`で構成します。Z方向は
+downsampleせず、出力層はI2I-RFRに合わせてtanhではなくlinearです。
+
+```yaml
+model:
+  name: pix2pix_generator
+  pix2pix_generator:
+    start_ch: 16
+    depth: 4
+    max_ch: 128
+    down_kernel_size_zyx: [1,4,4]
+    strides_zyx: [1,2,2]
+    up_kernel_size_zyx: [1,4,4]
+    dropout_depth: 2
+    dropout_rate: 0.3
+    leaky_relu_alpha: 0.2
+```
+
+`[8,192,192,2]`入力の標準設定では、軽量Generatorは387,415 parameters、
+既存U-Netは14,584,558 parametersです。軽量Generatorは約2.7%（約38分の1）
+なので、速度・GPUメモリと復元性能の比較に使用できます。checkpointの形状は
+異なるため、U-Netの重みをPix2Pix Generatorへ直接ロードすることはできません。
+
+さらに小さい構成は、例えば次のように比較できます。
+
+```bash
+python main.py --overrides \
+  model.name=pix2pix_generator \
+  model.pix2pix_generator.start_ch=8 \
+  model.pix2pix_generator.depth=3 \
+  model.pix2pix_generator.max_ch=64 \
+  model.pix2pix_generator.dropout_depth=1 \
+  exp_dir=results/pix2pix_tiny
+```
+
 ## I2I-RFR
 
 学習時は、target画像 `y` とノイズ `eps` から以下の状態を作ります。
@@ -309,6 +357,24 @@ results/exp_0001/sample_val/source/
 results/exp_0001/sample_val/target/
 results/exp_0001/sample_val/comparison/
 ```
+
+学習cropは、affine augmentation後の全Zスライスに心臓マスクのbit 6が
+1 voxel以上残るまで再抽選します。これにより、cropの一部が完全な背景
+スライスになることを防ぎます。
+
+```yaml
+aug:
+  foreground_crop:
+    enabled: true
+    min_voxels_per_slice: 1
+    max_attempts: 20
+```
+
+条件を厳しくする場合は `min_voxels_per_slice` を増やします。20回試しても
+条件を満たせない場合は、背景cropを学習へ渡さずエラーにします。その場合は
+`crop_size_zyx[0]`、X/Y軸回転、`margin`、`organ_crop`を調整してください。
+この機能を有効にした学習データには、画像と同じプレフィックスの
+`.mask.hdr`が必要です。
 
 学習を開始します。
 

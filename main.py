@@ -14,7 +14,7 @@ from omegaconf import ListConfig, OmegaConf
 
 from callbacks import ImageLogger, UnifiedTensorBoardLogger
 from data.dataloader import create_dataloader
-from models import build_unet
+from models import build_model, canonicalize_model_name, get_downsample_factor_zyx
 from trainer import CustomModel
 
 
@@ -129,17 +129,51 @@ def read_cfg_and_parse_arg():
     )
     if not 0 <= cfg.bit_info.heart_bit < cfg.bit_info.padding_bit:
         raise ValueError("bit_info.heart_bitは0以上padding_bit未満にしてください")
+    foreground_crop_cfg = getattr(cfg.aug, "foreground_crop", None)
+    if foreground_crop_cfg is not None and foreground_crop_cfg.enabled:
+        if foreground_crop_cfg.min_voxels_per_slice < 1:
+            raise ValueError(
+                "aug.foreground_crop.min_voxels_per_sliceは1以上にしてください"
+            )
+        if foreground_crop_cfg.max_attempts < 1:
+            raise ValueError("aug.foreground_crop.max_attemptsは1以上にしてください")
     gradient_loss_cfg = getattr(cfg.loss, "gradient", None)
     if gradient_loss_cfg is not None and gradient_loss_cfg.weight < 0:
         raise ValueError("loss.gradient.weightは0以上にしてください")
-    if cfg.model.unet.downsample_type not in ["max_pool", "stride_conv"]:
+    model_name = canonicalize_model_name(cfg.model.name)
+    if model_name == "unet":
+        if cfg.model.unet.downsample_type not in ["max_pool", "stride_conv"]:
+            raise ValueError(
+                "model.unet.downsample_typeはmax_poolまたはstride_convを"
+                "指定してください"
+            )
+        if cfg.model.unet.upsample_type not in ["transpose_conv", "resize_conv"]:
+            raise ValueError(
+                "model.unet.upsample_typeはtranspose_convまたはresize_convを"
+                "指定してください"
+            )
+    else:
+        pix2pix_cfg = cfg.model.pix2pix_generator
+        if pix2pix_cfg.depth < 2:
+            raise ValueError("model.pix2pix_generator.depthは2以上にしてください")
+        if pix2pix_cfg.start_ch <= 0 or pix2pix_cfg.max_ch < pix2pix_cfg.start_ch:
+            raise ValueError(
+                "model.pix2pix_generatorはstart_ch > 0かつ"
+                "max_ch >= start_chにしてください"
+            )
+        if not 0 <= pix2pix_cfg.dropout_depth < pix2pix_cfg.depth:
+            raise ValueError(
+                "model.pix2pix_generator.dropout_depthは0以上depth未満にしてください"
+            )
+        if not 0 <= pix2pix_cfg.dropout_rate < 1:
+            raise ValueError(
+                "model.pix2pix_generator.dropout_rateは0以上1未満にしてください"
+            )
+    downsample_factor = get_downsample_factor_zyx(cfg.model)
+    if np.any(np.asarray(cfg.aug.crop_size_zyx) % downsample_factor):
         raise ValueError(
-            "model.unet.downsample_typeはmax_poolまたはstride_convを指定してください"
-        )
-    if cfg.model.unet.upsample_type not in ["transpose_conv", "resize_conv"]:
-        raise ValueError(
-            "model.unet.upsample_typeはtranspose_convまたはresize_convを"
-            "指定してください"
+            "aug.crop_size_zyxは選択モデルのdownsample倍率 "
+            f"{downsample_factor.tolist()} で割り切れる値にしてください"
         )
     if training_mode == "self_supervised_deblur":
         degradation_type = str(
@@ -563,14 +597,11 @@ if __name__ == "__main__":
     input_shape = tuple(cfg.aug.crop_size_zyx) + (
         cfg.model.input_num_channel + cfg.model.num_channel,
     )
-    model: CustomModel = build_unet(
-        CustomModel,
-        input_shape,
-        cfg.model.num_channel,
-        **cfg.model.unet,
-        **cfg.model.renorm,
+    model: CustomModel = build_model(
+        CustomModel, input_shape, cfg.model.num_channel, cfg.model
     )
     model.cfg = cfg
+    logging.info(f"Model: {cfg.model.name}, parameters: {model.count_params():,}")
 
     # オプティマイザを選択する
     optimizer = select_optimizer(cfg)

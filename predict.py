@@ -12,7 +12,7 @@ from tqdm import tqdm
 from data.dataloader import create_dataloader
 from data.utils import calculate_intensity
 from main import get_training_mode, gpu_setting, prepare_data_dict
-from models import build_unet
+from models import build_model, get_downsample_factor_zyx
 from sliding_window import resample_volume, sliding_window_inference
 from trainer import CustomModel
 
@@ -23,13 +23,7 @@ def load_checkpoint(checkpoint_path, cfg) -> CustomModel:
     input_shape = tuple(cfg.aug.crop_size_zyx) + (
         cfg.model.input_num_channel + cfg.model.num_channel,
     )
-    model = build_unet(
-        CustomModel,
-        input_shape,
-        cfg.model.num_channel,
-        **cfg.model.unet,
-        **cfg.model.renorm,
-    )
+    model = build_model(CustomModel, input_shape, cfg.model.num_channel, cfg.model)
     model.load_weights(checkpoint_path)
     return model
 
@@ -320,13 +314,10 @@ if __name__ == "__main__":
         if any(size <= 0 for size in args.crop_size_zyx):
             parser.error("--crop-size-zyxには正の整数を指定してください")
         cfg.aug.crop_size_zyx = list(args.crop_size_zyx)
-        downsample_factor = np.power(
-            np.asarray(cfg.model.unet.pool_size_zyx, dtype=np.int64),
-            int(cfg.model.unet.depth),
-        )
+        downsample_factor = get_downsample_factor_zyx(cfg.model)
         if np.any(np.asarray(args.crop_size_zyx) % downsample_factor):
             parser.error(
-                "--crop-size-zyxはUNetのdownsample倍率 "
+                "--crop-size-zyxは選択モデルのdownsample倍率 "
                 f"{downsample_factor.tolist()} で割り切れる値にしてください"
             )
     if args.inference_steps is not None:

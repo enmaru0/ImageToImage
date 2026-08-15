@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from .dataloader_utils import (
     get_center,
+    has_foreground_in_every_z_slice,
     load_intensity,
     load_organ_box,
     save_intensity,
@@ -58,34 +59,81 @@ def preprocess_image_np(
         load_organ_box(organ_box_path) if organ_box_path.exists() else body_box_zyxzyx
     )
 
-    # 心臓boxがない場合はorgan_box_zyxzyxがbody boxへフォールバックする。
-    crop_center_zyx = get_center(
-        img_size_zyx,
-        spacing_zyx,
-        is_training,
-        body_box_zyxzyx,
-        organ_box_zyxzyx,
-        cfg.aug.random_crop_method,
-        crop_size_zyx,
-        cfg.aug.affine.norm_spacing_zyx,
-        cfg.aug.margin,
-        cfg.aug.crop_keep_ratio,
-    )
-
     # アフィン変換のためのインスタンスを作成
     affine_transform = AffineTransform(crop_size_zyx=crop_size_zyx, **cfg.aug.affine)
 
-    # アフィン行列を計算
-    affine_matrix = affine_transform.get_affine(
-        spacing_zyx, crop_center_zyx, is_training
+    foreground_crop_cfg = getattr(cfg.aug, "foreground_crop", None)
+    enforce_foreground_crop = bool(
+        is_training and foreground_crop_cfg is not None and foreground_crop_cfg.enabled
+    )
+    if enforce_foreground_crop and not organ_hdr_path.exists():
+        raise FileNotFoundError(
+            "各cropスライスの前景を保証するための心臓マスクがありません: "
+            f"{organ_hdr_path}。aug.foreground_crop.enabled=falseで無効化できます。"
+        )
+
+    max_crop_attempts = (
+        int(foreground_crop_cfg.max_attempts) if enforce_foreground_crop else 1
+    )
+    min_foreground_voxels = (
+        int(foreground_crop_cfg.min_voxels_per_slice) if enforce_foreground_crop else 1
     )
 
-    # 必要な画像領域を計算
-    img_region_zyxzyx, shift_start = calc_img_crop_region(
-        crop_size_zyx, affine_matrix, [0, 0, 0], img_size_zyx
-    )
-    # 画像などは切り取って読み込むのでその分アフィン行列をシフトさせる
-    affine_matrix = affine_transform.fix_start(affine_matrix, shift_start)
+    # crop中心とaugmentationを再抽選し、変換後の全Zスライスに心臓が残るものを採用する。
+    # 変換前のboxだけで判定すると、X/Y軸回転後に端のスライスが背景だけになることがある。
+    for crop_attempt in range(max_crop_attempts):
+        # 心臓boxがない場合はorgan_box_zyxzyxがbody boxへフォールバックする。
+        crop_center_zyx = get_center(
+            img_size_zyx,
+            spacing_zyx,
+            is_training,
+            body_box_zyxzyx,
+            organ_box_zyxzyx,
+            cfg.aug.random_crop_method,
+            crop_size_zyx,
+            cfg.aug.affine.norm_spacing_zyx,
+            cfg.aug.margin,
+            cfg.aug.crop_keep_ratio,
+        )
+
+        affine_matrix = affine_transform.get_affine(
+            spacing_zyx, crop_center_zyx, is_training
+        )
+        img_region_zyxzyx, shift_start = calc_img_crop_region(
+            crop_size_zyx, affine_matrix, [0, 0, 0], img_size_zyx
+        )
+        # 画像などは切り取って読み込むので、その分アフィン行列をシフトさせる。
+        affine_matrix = affine_transform.fix_start(affine_matrix, shift_start)
+
+        if not organ_hdr_path.exists():
+            # 心臓マスクがないデータ。motion生成時はGaussian ROIへfallbackする。
+            raw_msk = np.zeros(
+                img_region_zyxzyx[3:6] - img_region_zyxzyx[:3], np.uint16
+            )
+        else:
+            # 心臓bitを含むbit mask全体を保持し、GPU側でも利用する。
+            raw_msk = read_re4(
+                organ_hdr_path,
+                clip_zyxzyx=img_region_zyxzyx,
+                size_zyx=img_size_zyx,
+                type_flag="mask",
+            )
+
+        assert cfg.bit_info.padding_bit < check_mask_bit_number(raw_msk)
+        msk = affine_transform.apply(
+            raw_msk, affine_matrix, order=0, cval=1 << cfg.bit_info.padding_bit
+        )
+        if not enforce_foreground_crop or has_foreground_in_every_z_slice(
+            msk, int(cfg.bit_info.heart_bit), min_foreground_voxels
+        ):
+            break
+    else:
+        raise ValueError(
+            f"{img_hdr_path}: {max_crop_attempts}回試行しても全Zスライスに"
+            f"心臓マスクbit {cfg.bit_info.heart_bit}を"
+            f"{min_foreground_voxels} voxel以上含むcropを作成できませんでした。"
+            "crop_size_zyx[0]を小さくするか、回転・margin・organ_cropを弱めてください。"
+        )
 
     # ここでは画像は読み込まずメモリマッピングをするだけ。アフィン変換で初めて画像を読む
     img = read_raw(
@@ -103,29 +151,8 @@ def preprocess_image_np(
         use_memmap=True,
     )
 
-    if not organ_hdr_path.exists():
-        # 心臓マスクがないデータ。motion生成時はGaussian ROIへfallbackする。
-        msk = np.zeros_like(img, np.uint16)
-    else:
-        # 心臓bitを含むbit mask全体を保持し、GPU側でも利用する。
-        msk = read_re4(
-            organ_hdr_path,
-            clip_zyxzyx=img_region_zyxzyx,
-            size_zyx=img_size_zyx,
-            type_flag="mask",
-        )
-    # TODO cfg.bit_info.padding_bitを画像領域を保持するためのbitとして使うので、空でない場合は下記のコードを実行すること
-    # msk = np.bitwise_and(msk, ~(1 << cfg.bit_info.padding_bit))  # cfg.bit_info.padding_bit(default: 15)をクリア
-
-    # アフィン変換：スケーリング、フリップ、回転、シフト、クロップすべて同時に行う。
-    # batchnormなどで、統計値を計算する範囲を限定するなどに使う
-    # 画像領域を記録したimg_mskを作成したいので、cvalを1<<cfg.bit_info.padding_bitとする
-    # 注意：affine_transformは処理時間がかかるので、可能な限りmskをまとめて処理すること
-    assert cfg.bit_info.padding_bit < check_mask_bit_number(msk)
-    msk = affine_transform.apply(
-        msk, affine_matrix, order=0, cval=1 << cfg.bit_info.padding_bit
-    )
-    # bitの取り出しやその他の操作はGPU上で行うのでこれ以上は操作しない
+    # mskはcrop候補の判定時に同一affineで変換済み。
+    # bitの取り出しやその他の操作はGPU上で行うのでこれ以上は操作しない。
     target_img = affine_transform.apply(target_img, affine_matrix, order=1)
 
     # thin->thick変換の準備
