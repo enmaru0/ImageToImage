@@ -101,8 +101,19 @@ self_supervised_deblur:
     enabled: true
     clean_thickness_mm: 3.0
     degraded_thickness_mm: 5.0
+    profile_model: gaussian_fwhm # gaussian_fwhm / box_variance
     gaussian_truncate: 3.0
 ```
+
+`profile_model`では追加Gaussianのσ計算を選択できます。
+
+- `gaussian_fwhm`: スライス厚をGaussian SSPのFWHMとみなす従来方式
+- `box_variance`: スライス厚を矩形平均幅とみなし、その分散に合わせる方式
+
+3 mm→5 mm、Z spacing 3 mmの場合、`gaussian_fwhm`は
+`sigma=1.699 mm = 0.566 voxel`、`box_variance`は
+`sigma=1.155 mm = 0.385 voxel`です。1 mm→5 mm、Z spacing 1 mmで
+`box_variance`を使うと、`sigma=1.414 mm = 1.414 voxel`になります。
 
 処理は次の順序です。
 
@@ -391,7 +402,8 @@ python main.py
 python main.py --overrides \
   test_data_dir=datasets_non_gated_test \
   test_image_log.max_images=3 \
-  test_image_log.seed=0
+  test_image_log.seed=0 \
+  test_image_log.require_heart_mask=true
 ```
 
 各validation時に、TensorBoardへ次の画像が記録されます。
@@ -402,6 +414,11 @@ python main.py --overrides \
 test画像は損失やvalidation metricには使用されません。また、epoch間でモデルの
 変化だけを比較できるように、I2I-RFRの初期ノイズは`seed`で固定されます。
 `test_data_dir: ""`のときは無効です。
+
+`require_heart_mask: true`の場合、各test画像と同じプレフィックスの`.mask.hdr`から
+`bit_info.heart_bit`（デフォルトbit 6）のbounding boxを計算し、その中心でcrop
+します。マスクがない画像を画像中心へフォールバックさせず、ファイル名を示して
+エラーにします。test画像ではランダムcrop、回転、拡大縮小を適用しません。
 
 実験ごとに設定を変える場合は、`--overrides` を使います。
 

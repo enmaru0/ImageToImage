@@ -12,6 +12,7 @@ test_data_dir: ""
 test_image_log:
   max_images: 3
   seed: 0 # epoch間の比較用にI2I-RFR初期ノイズを固定
+  require_heart_mask: true # .mask.hdrのbit_info.heart_bit中心でcrop
 num_train_steps: 1000000
 eval_every: 1000
 num_workers: 4
@@ -172,6 +173,9 @@ self_supervised_deblur:
     enabled: True
     clean_thickness_mm: 3.0
     degraded_thickness_mm: 5.0
+    # gaussian_fwhm: 厚さをGaussian FWHMとみなす
+    # box_variance: 矩形スライス平均の分散に合わせる（実測sigmaに近い方式）
+    profile_model: gaussian_fwhm
     gaussian_truncate: 3.0
 
 i2i_rfr:

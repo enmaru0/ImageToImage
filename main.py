@@ -35,7 +35,7 @@ def get_training_mode(cfg):
     return str(getattr(cfg, "training_mode", "paired"))
 
 
-def prepare_unpaired_data_dict(data_dir):
+def prepare_unpaired_data_dict(data_dir, require_heart_mask=False):
     """Build a source-only image dictionary for inference image logging."""
     test_dict = defaultdict(dict)
     for test_data_dir in _to_path_list(data_dir):
@@ -50,6 +50,12 @@ def prepare_unpaired_data_dict(data_dir):
             if not hdr_path.exists():
                 logging.warning(f"test画像のhdrがないためスキップします: {raw_path}")
                 continue
+            heart_mask_path = hdr_path.with_suffix(".mask.hdr")
+            if require_heart_mask and not heart_mask_path.exists():
+                raise FileNotFoundError(
+                    "test画像ログを心臓中心でcropするためのマスクがありません: "
+                    f"{heart_mask_path}。心臓領域はbit_info.heart_bitに格納してください"
+                )
             # 既存DataLoaderの幾何・強度前処理を再利用するため、target欄にも
             # sourceを設定する。test callbackはtargetやmetricを参照しない。
             image_pairs.append((hdr_path, hdr_path))
@@ -387,6 +393,14 @@ def read_cfg_and_parse_arg():
             cfg.self_supervised_deblur, "slice_thickness", None
         )
         if slice_thickness_cfg is not None and slice_thickness_cfg.enabled:
+            profile_model = str(
+                getattr(slice_thickness_cfg, "profile_model", "gaussian_fwhm")
+            )
+            if profile_model not in ["gaussian_fwhm", "box_variance"]:
+                raise ValueError(
+                    "slice_thickness.profile_modelはgaussian_fwhmまたは"
+                    "box_varianceを指定してください"
+                )
             if slice_thickness_cfg.clean_thickness_mm <= 0:
                 raise ValueError(
                     "slice_thickness.clean_thickness_mmは0より大きくしてください"
@@ -640,7 +654,12 @@ if __name__ == "__main__":
     val_loader = create_dataloader(val_dict, is_training=False, cfg=cfg)
     test_log_data = None
     if cfg.test_data_dir:
-        test_dict = prepare_unpaired_data_dict(cfg.test_data_dir)
+        require_heart_mask = bool(
+            getattr(cfg.test_image_log, "require_heart_mask", True)
+        )
+        test_dict = prepare_unpaired_data_dict(
+            cfg.test_data_dir, require_heart_mask=require_heart_mask
+        )
         num_test_images = sum(
             len(value["img_hdr_list"]) for value in test_dict.values()
         )
@@ -654,7 +673,8 @@ if __name__ == "__main__":
         )
         test_log_data = next(iter(test_loader))
         logging.info(
-            f"TensorBoard test image log: {test_batch_size}/{num_test_images} images"
+            f"TensorBoard test image log: {test_batch_size}/{num_test_images} images, "
+            f"crop={'heart mask center' if require_heart_mask else 'fallback allowed'}"
         )
 
     # モデルを作成

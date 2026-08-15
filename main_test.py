@@ -13,6 +13,13 @@ def _touch_volume(root: Path, relative_stem: str):
     return raw_path.with_suffix(".hdr")
 
 
+def _touch_heart_mask(image_hdr: Path):
+    mask_hdr = image_hdr.with_suffix(".mask.hdr")
+    mask_hdr.touch()
+    mask_hdr.with_suffix(".raw").touch()
+    return mask_hdr
+
+
 def test_prepare_unpaired_data_dict_finds_nested_images_and_ignores_masks(tmp_path):
     first_hdr = _touch_volume(tmp_path, "patient_a/image")
     second_hdr = _touch_volume(tmp_path, "patient_b/image")
@@ -29,3 +36,22 @@ def test_prepare_unpaired_data_dict_requires_hdr(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         prepare_unpaired_data_dict(tmp_path)
+
+
+def test_prepare_unpaired_data_dict_requires_heart_mask_when_enabled(tmp_path):
+    image_hdr = _touch_volume(tmp_path, "patient/image")
+
+    with pytest.raises(
+        FileNotFoundError, match=str(image_hdr.with_suffix(".mask.hdr"))
+    ):
+        prepare_unpaired_data_dict(tmp_path, require_heart_mask=True)
+
+
+def test_prepare_unpaired_data_dict_accepts_heart_mask_when_required(tmp_path):
+    image_hdr = _touch_volume(tmp_path, "patient/image")
+    _touch_heart_mask(image_hdr)
+
+    data_dict = prepare_unpaired_data_dict(tmp_path, require_heart_mask=True)
+
+    pairs = next(iter(data_dict.values()))["img_hdr_list"]
+    assert pairs == [(image_hdr, image_hdr)]

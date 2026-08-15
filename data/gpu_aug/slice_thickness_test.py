@@ -12,6 +12,26 @@ def test_additional_sigma_accounts_for_existing_three_mm_profile():
     assert math.isclose(sigma_vox, expected)
 
 
+def test_box_variance_sigma_accounts_for_rectangular_slice_aperture():
+    sigma_vox = _additional_gaussian_sigma_vox(
+        3.0, 5.0, 3.0, profile_model="box_variance"
+    )
+    expected = math.sqrt((5.0**2 - 3.0**2) / 12.0) / 3.0
+    assert math.isclose(sigma_vox, expected)
+
+
+def test_one_to_five_mm_box_variance_is_close_to_empirical_sigma():
+    sigma_vox = _additional_gaussian_sigma_vox(
+        1.0, 5.0, 1.0, profile_model="box_variance"
+    )
+    assert math.isclose(sigma_vox, math.sqrt(2.0))
+
+
+def test_unknown_profile_model_is_rejected():
+    with np.testing.assert_raises(ValueError):
+        _additional_gaussian_sigma_vox(3.0, 5.0, 3.0, profile_model="unknown")
+
+
 def test_constant_signal_and_output_shape_are_preserved():
     imgs = tf.fill((2, 8, 6, 7, 1), 0.4)
     img_msks = tf.ones_like(imgs)
@@ -21,6 +41,7 @@ def test_constant_signal_and_output_shape_are_preserved():
         spacing_mm_z=3.0,
         clean_thickness_mm=3.0,
         degraded_thickness_mm=5.0,
+        profile_model="box_variance",
     )
     assert output.shape == imgs.shape
     np.testing.assert_allclose(output.numpy(), imgs.numpy(), atol=1e-6)
@@ -31,22 +52,24 @@ def test_z_high_frequency_is_reduced_without_xy_blur_and_is_xla_compatible():
     imgs = tf.broadcast_to(z_signal[None, :, None, None, None], (1, 8, 5, 6, 1))
     img_msks = tf.ones_like(imgs)
 
-    apply_degradation = tf.function(
-        lambda image, mask: simulate_slice_thickness(
-            image,
-            mask,
-            spacing_mm_z=3.0,
-            clean_thickness_mm=3.0,
-            degraded_thickness_mm=5.0,
-        ),
-        jit_compile=True,
-    )
-    output = apply_degradation(imgs, img_msks)
+    for profile_model in ["gaussian_fwhm", "box_variance"]:
+        apply_degradation = tf.function(
+            lambda image, mask: simulate_slice_thickness(
+                image,
+                mask,
+                spacing_mm_z=3.0,
+                clean_thickness_mm=3.0,
+                degraded_thickness_mm=5.0,
+                profile_model=profile_model,
+            ),
+            jit_compile=True,
+        )
+        output = apply_degradation(imgs, img_msks)
 
-    input_variation = tf.reduce_mean(tf.abs(imgs[:, 1:] - imgs[:, :-1]))
-    output_variation = tf.reduce_mean(tf.abs(output[:, 1:] - output[:, :-1]))
-    assert output.shape == imgs.shape
-    assert float(output_variation) < float(input_variation)
-    # Every XY position had the same Z signal, so Z-only processing must retain it.
-    reference = tf.broadcast_to(output[:, :, :1, :1], tf.shape(output))
-    np.testing.assert_allclose(reference.numpy(), output.numpy(), atol=1e-6)
+        input_variation = tf.reduce_mean(tf.abs(imgs[:, 1:] - imgs[:, :-1]))
+        output_variation = tf.reduce_mean(tf.abs(output[:, 1:] - output[:, :-1]))
+        assert output.shape == imgs.shape
+        assert float(output_variation) < float(input_variation)
+        # Every XY position had the same Z signal, so Z-only processing must retain it.
+        reference = tf.broadcast_to(output[:, :, :1, :1], tf.shape(output))
+        np.testing.assert_allclose(reference.numpy(), output.numpy(), atol=1e-6)

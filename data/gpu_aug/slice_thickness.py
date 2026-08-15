@@ -4,13 +4,27 @@ import tensorflow as tf
 
 
 def _additional_gaussian_sigma_vox(
-    clean_thickness_mm, degraded_thickness_mm, spacing_mm_z
+    clean_thickness_mm,
+    degraded_thickness_mm,
+    spacing_mm_z,
+    profile_model="gaussian_fwhm",
 ):
-    """Return the extra Gaussian sigma needed to broaden one Gaussian SSP."""
-    additional_fwhm_mm = math.sqrt(
+    """Return additional Z Gaussian sigma for the selected thickness model."""
+    additional_width_mm = math.sqrt(
         max(degraded_thickness_mm**2 - clean_thickness_mm**2, 0.0)
     )
-    return additional_fwhm_mm / math.sqrt(8.0 * math.log(2.0)) / spacing_mm_z
+    if profile_model == "gaussian_fwhm":
+        # Treat nominal slice thickness as the FWHM of a Gaussian SSP.
+        sigma_mm = additional_width_mm / math.sqrt(8.0 * math.log(2.0))
+    elif profile_model == "box_variance":
+        # Treat nominal thickness as a boxcar aperture and match its variance.
+        # A width-T box has variance T^2 / 12.
+        sigma_mm = additional_width_mm / math.sqrt(12.0)
+    else:
+        raise ValueError(
+            f"profile_model must be 'gaussian_fwhm' or 'box_variance': {profile_model}"
+        )
+    return sigma_mm / spacing_mm_z
 
 
 def _linear_sample_z(volume, coordinates):
@@ -55,16 +69,18 @@ def simulate_slice_thickness(
     spacing_mm_z,
     clean_thickness_mm=3.0,
     degraded_thickness_mm=5.0,
+    profile_model="gaussian_fwhm",
     gaussian_truncate=3.0,
     enabled=True,
 ):
     """Simulate thicker slices and interpolate back to the original Z grid.
 
-    The clean slice-sensitivity profile (SSP) and degraded SSP are approximated
-    as Gaussians whose FWHM equals their slice thickness. The additional Z blur
-    therefore has FWHM sqrt(degraded^2 - clean^2). The blurred volume is sampled
-    on an exact ``degraded_thickness_mm`` grid, then linearly sampled back onto
-    the original ``spacing_mm_z`` grid without changing output shape.
+    ``profile_model='gaussian_fwhm'`` treats nominal thickness as the FWHM of a
+    Gaussian SSP. ``profile_model='box_variance'`` treats it as the width of a
+    boxcar slice aperture and selects a Gaussian with the same added variance.
+    The blurred volume is sampled on an exact ``degraded_thickness_mm`` grid,
+    then linearly sampled back onto the original ``spacing_mm_z`` grid without
+    changing output shape.
     """
     del enabled
     imgs = tf.convert_to_tensor(imgs)
@@ -79,7 +95,10 @@ def simulate_slice_thickness(
     clean_thickness_mm = float(clean_thickness_mm)
     degraded_thickness_mm = float(degraded_thickness_mm)
     sigma_vox = _additional_gaussian_sigma_vox(
-        clean_thickness_mm, degraded_thickness_mm, spacing_mm_z
+        clean_thickness_mm,
+        degraded_thickness_mm,
+        spacing_mm_z,
+        profile_model=str(profile_model),
     )
     blurred = _gaussian_blur_z(
         imgs, img_msks, sigma_vox, truncate=float(gaussian_truncate)
