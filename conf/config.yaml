@@ -12,7 +12,8 @@ test_data_dir: ""
 test_image_log:
   max_images: 3
   seed: 0 # epoch間の比較用にI2I-RFR初期ノイズを固定
-  require_heart_mask: true # .mask.hdrのbit_info.heart_bit中心でcrop
+  require_heart_mask: true # .mask.hdrの指定heart_bit中心でcrop
+  heart_bit: null # nullはbit_info.heart_bitを使用。testマスクだけ異なる場合は指定
 num_train_steps: 1000000
 eval_every: 1000
 num_workers: 4

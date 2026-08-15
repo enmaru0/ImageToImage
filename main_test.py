@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import pytest
+from omegaconf import OmegaConf
 
-from main import prepare_unpaired_data_dict
+from main import get_test_heart_bit, prepare_unpaired_data_dict
 
 
 def _touch_volume(root: Path, relative_stem: str):
@@ -55,3 +56,38 @@ def test_prepare_unpaired_data_dict_accepts_heart_mask_when_required(tmp_path):
 
     pairs = next(iter(data_dict.values()))["img_hdr_list"]
     assert pairs == [(image_hdr, image_hdr)]
+
+
+def test_test_heart_bit_falls_back_to_training_bit():
+    cfg = OmegaConf.create(
+        {
+            "bit_info": {"heart_bit": 6, "padding_bit": 15},
+            "test_image_log": {"heart_bit": None},
+        }
+    )
+
+    assert get_test_heart_bit(cfg) == 6
+
+
+def test_test_heart_bit_can_differ_from_training_bit():
+    cfg = OmegaConf.create(
+        {
+            "bit_info": {"heart_bit": 6, "padding_bit": 15},
+            "test_image_log": {"heart_bit": 3},
+        }
+    )
+
+    assert get_test_heart_bit(cfg) == 3
+
+
+@pytest.mark.parametrize("heart_bit", [-1, 15])
+def test_test_heart_bit_rejects_invalid_value(heart_bit):
+    cfg = OmegaConf.create(
+        {
+            "bit_info": {"heart_bit": 6, "padding_bit": 15},
+            "test_image_log": {"heart_bit": heart_bit},
+        }
+    )
+
+    with pytest.raises(ValueError):
+        get_test_heart_bit(cfg)

@@ -35,6 +35,19 @@ def get_training_mode(cfg):
     return str(getattr(cfg, "training_mode", "paired"))
 
 
+def get_test_heart_bit(cfg):
+    """Resolve the heart bit used only for source-only test image crops."""
+    configured_bit = getattr(cfg.test_image_log, "heart_bit", None)
+    heart_bit = (
+        int(cfg.bit_info.heart_bit) if configured_bit is None else int(configured_bit)
+    )
+    if not 0 <= heart_bit < int(cfg.bit_info.padding_bit):
+        raise ValueError(
+            "test_image_log.heart_bitは0以上bit_info.padding_bit未満にしてください"
+        )
+    return heart_bit
+
+
 def prepare_unpaired_data_dict(data_dir, require_heart_mask=False):
     """Build a source-only image dictionary for inference image logging."""
     test_dict = defaultdict(dict)
@@ -54,7 +67,7 @@ def prepare_unpaired_data_dict(data_dir, require_heart_mask=False):
             if require_heart_mask and not heart_mask_path.exists():
                 raise FileNotFoundError(
                     "test画像ログを心臓中心でcropするためのマスクがありません: "
-                    f"{heart_mask_path}。心臓領域はbit_info.heart_bitに格納してください"
+                    f"{heart_mask_path}。心臓領域は指定したheart_bitに格納してください"
                 )
             # 既存DataLoaderの幾何・強度前処理を再利用するため、target欄にも
             # sourceを設定する。test callbackはtargetやmetricを参照しない。
@@ -181,6 +194,7 @@ def read_cfg_and_parse_arg():
         raise ValueError("bit_info.heart_bitは0以上padding_bit未満にしてください")
     if cfg.test_image_log.max_images < 1:
         raise ValueError("test_image_log.max_imagesは1以上にしてください")
+    get_test_heart_bit(cfg)
     foreground_crop_cfg = getattr(cfg.aug, "foreground_crop", None)
     if foreground_crop_cfg is not None and foreground_crop_cfg.enabled:
         if foreground_crop_cfg.min_voxels_per_slice < 1:
@@ -660,6 +674,12 @@ if __name__ == "__main__":
         test_dict = prepare_unpaired_data_dict(
             cfg.test_data_dir, require_heart_mask=require_heart_mask
         )
+        test_heart_bit = get_test_heart_bit(cfg)
+        # 学習・validation側のheart bitは変更せず、test cropのDataLoaderだけを
+        # testマスク用bitへ差し替える。
+        test_loader_cfg = OmegaConf.merge(
+            cfg, {"bit_info": {"heart_bit": test_heart_bit}}
+        )
         num_test_images = sum(
             len(value["img_hdr_list"]) for value in test_dict.values()
         )
@@ -667,14 +687,15 @@ if __name__ == "__main__":
         test_loader = create_dataloader(
             test_dict,
             is_training=False,
-            cfg=cfg,
+            cfg=test_loader_cfg,
             batch_size=test_batch_size,
             drop_remainder=False,
         )
         test_log_data = next(iter(test_loader))
         logging.info(
             f"TensorBoard test image log: {test_batch_size}/{num_test_images} images, "
-            f"crop={'heart mask center' if require_heart_mask else 'fallback allowed'}"
+            f"crop={'heart mask center' if require_heart_mask else 'fallback allowed'}, "
+            f"heart_bit={test_heart_bit}"
         )
 
     # モデルを作成

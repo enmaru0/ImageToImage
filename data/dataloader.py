@@ -37,7 +37,9 @@ def preprocess_image_np(
     crop_size_zyx = cfg.aug.crop_size_zyx
     # <image>.mask.hdrのheart_bitに心臓マスクが入っている。
     organ_hdr_path = img_hdr_path.with_suffix(".mask.hdr")
-    organ_box_path = img_hdr_path.with_suffix(".heart.box.txt")
+    heart_bit = int(cfg.bit_info.heart_bit)
+    # bitごとにbox cacheを分け、別bitで作ったboxの誤再利用を防ぐ。
+    organ_box_path = img_hdr_path.with_suffix(f".heart-bit{heart_bit}.box.txt")
     body_box_path = img_hdr_path.with_suffix(".body.box.txt")  # save_organ_boxで作成
 
     img_size_zyx, img_dtype, spacing_zyx = read_hdr(img_hdr_path)
@@ -346,13 +348,14 @@ def create_dataloader(
             ):
                 pass
 
-        # bit 6の心臓マスクからcrop中心決定用の矩形を計算しておく。
+        # 指定された心臓bitからcrop中心決定用の矩形を計算しておく。
         if any(path.with_suffix(".mask.hdr").exists() for path in source_hdr_path_list):
+            heart_bit = int(cfg.bit_info.heart_bit)
             func = partial(
                 save_organ_box,
                 suffix="",
-                src_bit=int(cfg.bit_info.heart_bit),
-                box_suffix=".heart",
+                src_bit=heart_bit,
+                box_suffix=f".heart-bit{heart_bit}",
             )
             _run(func, "saving heart box")
 

@@ -403,7 +403,8 @@ python main.py --overrides \
   test_data_dir=datasets_non_gated_test \
   test_image_log.max_images=3 \
   test_image_log.seed=0 \
-  test_image_log.require_heart_mask=true
+  test_image_log.require_heart_mask=true \
+  test_image_log.heart_bit=3
 ```
 
 各validation時に、TensorBoardへ次の画像が記録されます。
@@ -416,9 +417,12 @@ test画像は損失やvalidation metricには使用されません。また、ep
 `test_data_dir: ""`のときは無効です。
 
 `require_heart_mask: true`の場合、各test画像と同じプレフィックスの`.mask.hdr`から
-`bit_info.heart_bit`（デフォルトbit 6）のbounding boxを計算し、その中心でcrop
+`test_image_log.heart_bit`のbounding boxを計算し、その中心でcrop
 します。マスクがない画像を画像中心へフォールバックさせず、ファイル名を示して
 エラーにします。test画像ではランダムcrop、回転、拡大縮小を適用しません。
+`test_image_log.heart_bit: null`の場合は、学習用の`bit_info.heart_bit`を使用します。
+心臓boxのcacheは`.heart-bit3.box.txt`のようにbit別に保存されるため、学習用と
+test用で異なるbitのboxが混ざることはありません。
 
 実験ごとに設定を変える場合は、`--overrides` を使います。
 
