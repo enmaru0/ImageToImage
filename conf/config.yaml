@@ -14,8 +14,8 @@ test_image_log:
   seed: 0 # epoch間の比較用にI2I-RFR初期ノイズを固定
   require_heart_mask: true # .mask.hdrの指定heart_bit中心でcrop
   heart_bit: null # nullはbit_info.heart_bitを使用。testマスクだけ異なる場合は指定
-num_train_steps: 1000000
-eval_every: 1000
+num_train_steps: 10000000
+eval_every: 2000
 num_workers: 4
 batch_size: 16 # I2I-RFRではsource/targetとRFR中間テンソルを保持するため小さめにする
 prefetch_size: 1
