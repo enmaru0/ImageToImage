@@ -12,6 +12,7 @@ class ImageLogger(keras.callbacks.Callback):
         jit_compile,
         test_data=None,
         test_seed=0,
+        val_seed=0,
         num_output_channels=1,
         max_test_images=3,
     ):
@@ -23,9 +24,23 @@ class ImageLogger(keras.callbacks.Callback):
         self.first_test_log = True
         self.max_test_images = max_test_images
 
+        val_noise_shape = tf.concat(
+            [
+                tf.shape(val_data["imgs"])[:-1],
+                tf.constant([num_output_channels], tf.int32),
+            ],
+            axis=0,
+        )
+        self.val_initial_noise = tf.random.stateless_normal(
+            val_noise_shape, seed=[int(val_seed), 0], dtype=tf.float32
+        )
+
         def predict_step(data):
             return self.model.predict_step(
-                data, return_aux=True, apply_self_supervised_blur=True
+                data,
+                return_aux=True,
+                apply_self_supervised_blur=True,
+                initial_noise=self.val_initial_noise,
             )
 
         self.one_step = tf.function(

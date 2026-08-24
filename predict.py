@@ -15,6 +15,11 @@ from main import get_training_mode, gpu_setting, prepare_data_dict
 from models import build_model, get_downsample_factor_zyx
 from sliding_window import resample_volume, sliding_window_inference
 from trainer import CustomModel
+from utils.predict_utils import (
+    make_crop_initial_noise,
+    make_difference_img,
+    seed_save_dir,
+)
 
 
 def load_checkpoint(checkpoint_path, cfg) -> CustomModel:
@@ -91,7 +96,7 @@ def _intensity_range(img, cfg):
     return window_level - window_width / 2, window_level + window_width / 2
 
 
-def predict_full_volumes(model, cfg, save_dir, overlap, seed):
+def predict_full_volumes(model, cfg, save_dir, overlap, seed, save_difference=False):
     source_data_dirs = _to_data_dir_list(cfg.source_data_dir)
     window_size_zyx = tuple(int(size) for size in cfg.aug.crop_size_zyx)
     model_spacing_zyx = np.asarray(cfg.aug.affine.norm_spacing_zyx, np.float32)
@@ -183,6 +188,14 @@ def predict_full_volumes(model, cfg, save_dir, overlap, seed):
             output_path = (save_dir / output_relative_path).with_suffix(".hdr")
             output_path.parent.mkdir(parents=True, exist_ok=True)
             save_raw(prediction, source_spacing_zyx, output_path)
+            if save_difference:
+                difference = make_difference_img(prediction, source_img)
+                difference_path = output_path.with_suffix(".difference.hdr")
+                save_raw(difference, source_spacing_zyx, difference_path)
+                logging.info(
+                    f"Saved prediction-source difference: {difference_path}, "
+                    f"range=[{int(difference.min())}, {int(difference.max())}] HU"
+                )
             logging.info(f"Saved full-volume prediction: {output_path}")
             volume_count += 1
 
@@ -219,6 +232,13 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--seed", type=int, default=0, help="全volumeで共有するI2I-RFR初期ノイズのseed"
+    )
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=None,
+        help=("同じ入力を複数seedで比較する。例: --seeds 0 1。指定時は--seedより優先"),
     )
     parser.add_argument(
         "--output-dir",
@@ -277,6 +297,11 @@ if __name__ == "__main__":
         action="store_true",
         help="input/output/target結合画像を保存しない",
     )
+    parser.add_argument(
+        "--save-difference",
+        action="store_true",
+        help="符号付きHU差分prediction-sourceを*.difference.hdr/.rawへ保存する",
+    )
     args = parser.parse_args()
 
     checkpoint_path: Path = args.checkpoint_path
@@ -302,6 +327,11 @@ if __name__ == "__main__":
         parser.error("self_supervised_deblurモードでは--target-data-dirは使用しません")
     if not 0 <= args.window_overlap < 1:
         parser.error("--window-overlapは0以上1未満にしてください")
+    seeds = list(args.seeds) if args.seeds is not None else [args.seed]
+    if any(seed < 0 or seed > np.iinfo(np.int32).max for seed in seeds):
+        parser.error("--seed/--seedsは0以上2147483647以下にしてください")
+    if len(set(seeds)) != len(seeds):
+        parser.error("--seedsに同じseedを重複して指定しないでください")
     if args.source_data_dir is not None:
         if not args.source_data_dir.is_dir():
             parser.error(f"sourceフォルダが見つかりません: {args.source_data_dir}")
@@ -345,10 +375,21 @@ if __name__ == "__main__":
     logging.info(f"Loaded from: {checkpoint_path} (optimizer state skipped)")
 
     if args.sliding_window:
-        volume_count = predict_full_volumes(
-            model, cfg, save_dir, args.window_overlap, args.seed
-        )
-        logging.info(f"Completed full-volume inference: {volume_count} volumes")
+        for seed in seeds:
+            current_save_dir = seed_save_dir(save_dir, seeds, seed)
+            current_save_dir.mkdir(exist_ok=True, parents=True)
+            volume_count = predict_full_volumes(
+                model,
+                cfg,
+                current_save_dir,
+                args.window_overlap,
+                seed,
+                save_difference=args.save_difference,
+            )
+            logging.info(
+                f"Completed full-volume inference: seed={seed}, "
+                f"{volume_count} volumes, output={current_save_dir}"
+            )
         raise SystemExit(0)
 
     # 従来のcrop推論用データを準備
@@ -358,40 +399,63 @@ if __name__ == "__main__":
     test_loader = create_dataloader(val_dict, is_training=False, cfg=cfg)
 
     spacing_zyx = np.array(cfg.aug.affine.norm_spacing_zyx, np.float32)
-    for data in tqdm(test_loader):
-        pred = model.predict_step(data).numpy()
-        source = data["imgs"].numpy()
-        target = data.get("target_imgs")
-        if target is not None:
-            target = target.numpy()
-        keys = [key.decode() for key in data["img_hdr_list"].numpy()]
-        target_min_clip_vals = data["target_min_clip_vals"].numpy()
-        target_max_clip_vals = data["target_max_clip_vals"].numpy()
-
-        for idx, key in enumerate(keys):
-            source_img = source[idx, :, :, :, 0]
-            source_img = to_int16_img(source_img)
-            save_raw(source_img, spacing_zyx, save_dir / f"{key}.input.hdr")
-
-            pred_img = pred[idx, :, :, :, 0]
-            pred_img = reverse_normalize_img(
-                pred_img, target_min_clip_vals[idx], target_max_clip_vals[idx]
+    for seed in seeds:
+        current_save_dir = seed_save_dir(save_dir, seeds, seed)
+        current_save_dir.mkdir(exist_ok=True, parents=True)
+        for data in tqdm(test_loader, desc=f"seed={seed}"):
+            initial_noise = make_crop_initial_noise(
+                data, int(cfg.model.num_channel), seed
             )
-            pred_img = to_int16_img(pred_img)
-            save_raw(pred_img, spacing_zyx, save_dir / f"{key}.hdr")
-
-            comparison_img_list = [source_img, pred_img]
+            pred = model.predict_step(data, initial_noise=initial_noise).numpy()
+            source = data["imgs"].numpy()
+            target = data.get("target_imgs")
             if target is not None:
-                target_img = target[idx, :, :, :, 0]
-                target_img = to_int16_img(target_img)
-                save_raw(target_img, spacing_zyx, save_dir / f"{key}.target.hdr")
-                comparison_img_list.append(target_img)
+                target = target.numpy()
+            keys = [key.decode() for key in data["img_hdr_list"].numpy()]
+            target_min_clip_vals = data["target_min_clip_vals"].numpy()
+            target_max_clip_vals = data["target_max_clip_vals"].numpy()
 
-            if not args.no_save_comparison:
-                comparison_img = concat_comparison_img(comparison_img_list)
-                save_raw(
-                    comparison_img, spacing_zyx, save_dir / f"{key}.comparison.hdr"
+            for idx, key in enumerate(keys):
+                source_img = source[idx, :, :, :, 0]
+                source_img = to_int16_img(source_img)
+                save_raw(source_img, spacing_zyx, current_save_dir / f"{key}.input.hdr")
+
+                pred_img = pred[idx, :, :, :, 0]
+                pred_img = reverse_normalize_img(
+                    pred_img, target_min_clip_vals[idx], target_max_clip_vals[idx]
                 )
+                pred_img = to_int16_img(pred_img)
+                save_raw(pred_img, spacing_zyx, current_save_dir / f"{key}.hdr")
 
-        del pred, source, target
-        gc.collect()
+                if args.save_difference:
+                    difference = make_difference_img(pred_img, source_img)
+                    difference_path = current_save_dir / f"{key}.difference.hdr"
+                    save_raw(difference, spacing_zyx, difference_path)
+                    logging.info(
+                        f"Saved prediction-source difference: {difference_path}, "
+                        f"range=[{int(difference.min())}, "
+                        f"{int(difference.max())}] HU"
+                    )
+
+                comparison_img_list = [source_img, pred_img]
+                if target is not None:
+                    target_img = target[idx, :, :, :, 0]
+                    target_img = to_int16_img(target_img)
+                    save_raw(
+                        target_img, spacing_zyx, current_save_dir / f"{key}.target.hdr"
+                    )
+                    comparison_img_list.append(target_img)
+
+                if not args.no_save_comparison:
+                    comparison_img = concat_comparison_img(comparison_img_list)
+                    save_raw(
+                        comparison_img,
+                        spacing_zyx,
+                        current_save_dir / f"{key}.comparison.hdr",
+                    )
+
+            del pred, source, target
+            gc.collect()
+        logging.info(
+            f"Completed crop inference: seed={seed}, output={current_save_dir}"
+        )

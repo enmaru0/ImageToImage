@@ -393,6 +393,31 @@ aug:
 python main.py
 ```
 
+### validation評価指標
+
+各validationでは、従来のMAE、MSE、PSNR、lossに加えて次の指標を
+TensorBoardへ記録します。これらはランダム時刻のtrain予測ではなく、
+I2I-RFRの最終生成画像に対して症例単位で計算されます。
+
+- `val_ssim_xy_global`: axial 2D SSIM（paddingを除く画像全体、高いほど良い）
+- `val_ssim_xy_heart`: 心臓マスク内のaxial 2D SSIM（高いほど良い）
+- `val_psnr_heart`: 心臓マスク内のPSNR（高いほど良い）
+- `val_mae_hu_heart`: 心臓マスク内のHU誤差（低いほど良い）
+- `val_z_gradient_mae`: 隣接スライス差の誤差（低いほど良い）
+- `val_xy_edge_strength_ratio`: 出力/targetのXY輪郭強度比（1が理想）
+
+```yaml
+evaluation_metrics:
+  validation_seed: 0
+  ssim_filter_size: 11
+  ssim_filter_sigma: 1.5
+  edge_epsilon: 1.0e-6
+```
+
+validationの初期ノイズとTensorBoardのvalidation画像は`validation_seed`で
+固定されるため、epoch間の差はモデル更新による変化として比較できます。
+心臓領域の指標には`bit_info.heart_bit`のマスクを使用します。
+
 ### 正解なしtest画像のTensorBoardログ
 
 正解画像のない実データを学習中に定点観測する場合は、`test_data_dir`を
@@ -495,6 +520,30 @@ python predict.py results/exp_0001/checkpoints/model_latest.keras \
   --output-dir /path/to/output \
   --seed 123
 ```
+
+心臓境界の過剰補正を調べる場合は、同じ入力をseed 0/1で推論し、
+符号付きHU差分 `prediction - source` を同時に保存できます。
+
+```bash
+python predict.py results/exp_0001/checkpoints/model_latest.keras \
+  --source-data-dir /path/to/images \
+  --sliding-window \
+  --seeds 0 1 \
+  --save-difference
+```
+
+複数seedを指定した場合、結果は上書きを避けるため次のように分けて保存されます。
+
+```text
+preds_full/seed_0/case001.hdr
+preds_full/seed_0/case001.difference.hdr
+preds_full/seed_1/case001.hdr
+preds_full/seed_1/case001.difference.hdr
+```
+
+`*.difference.hdr/.raw` は符号付きint16のHU差分です。画像ビューアではまず
+WL=0、WW=200～400程度で表示すると、正負の境界リムを確認しやすくなります。
+seedを1つだけ指定した場合は、従来どおり`seed_*`サブフォルダを作りません。
 
 sliding-window推論ではtarget画像を使用しないため、pairedモデルでも
 `--source-data-dir` だけで実行できます。通常のcrop推論を行うpairedモデルでは、

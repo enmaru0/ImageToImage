@@ -206,6 +206,20 @@ def read_cfg_and_parse_arg():
     gradient_loss_cfg = getattr(cfg.loss, "gradient", None)
     if gradient_loss_cfg is not None and gradient_loss_cfg.weight < 0:
         raise ValueError("loss.gradient.weightは0以上にしてください")
+    metric_cfg = cfg.evaluation_metrics
+    ssim_filter_size = int(metric_cfg.ssim_filter_size)
+    if ssim_filter_size <= 0 or ssim_filter_size % 2 == 0:
+        raise ValueError("evaluation_metrics.ssim_filter_sizeは正の奇数にしてください")
+    if ssim_filter_size > min(cfg.aug.crop_size_zyx[1:]):
+        raise ValueError(
+            "evaluation_metrics.ssim_filter_sizeはcropのXYサイズ以下にしてください"
+        )
+    if metric_cfg.ssim_filter_sigma <= 0:
+        raise ValueError(
+            "evaluation_metrics.ssim_filter_sigmaは0より大きくしてください"
+        )
+    if metric_cfg.edge_epsilon <= 0:
+        raise ValueError("evaluation_metrics.edge_epsilonは0より大きくしてください")
     model_name = canonicalize_model_name(cfg.model.name)
     if model_name == "unet":
         if cfg.model.unet.downsample_type not in ["max_pool", "stride_conv"]:
@@ -741,6 +755,7 @@ if __name__ == "__main__":
         jit_compile=True,
         test_data=test_log_data,
         test_seed=int(cfg.test_image_log.seed),
+        val_seed=int(cfg.evaluation_metrics.validation_seed),
         num_output_channels=int(cfg.model.num_channel),
         max_test_images=int(cfg.test_image_log.max_images),
     )

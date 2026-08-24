@@ -1,4 +1,6 @@
 from types import SimpleNamespace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import tensorflow as tf
 
@@ -23,7 +25,8 @@ class _FakeInferenceModel:
         apply_self_supervised_blur=False,
         initial_noise=None,
     ):
-        del apply_self_supervised_blur, initial_noise
+        del apply_self_supervised_blur
+        assert initial_noise is not None
         imgs = normalize(data["imgs"], data["min_clip_vals"], data["max_clip_vals"])
         preds = imgs * 0.5
         if return_aux:
@@ -59,6 +62,7 @@ def test_image_logger_writes_source_only_test_images(tmp_path):
         log_dir=tmp_path,
         jit_compile=False,
         test_seed=123,
+        val_seed=456,
         num_output_channels=1,
         max_test_images=1,
     )
@@ -75,3 +79,8 @@ def test_image_logger_writes_source_only_test_images(tmp_path):
     }
     assert "Test/Source Images" in tags
     assert "Test/Translated Images" in tags
+
+
+if __name__ == "__main__":
+    with TemporaryDirectory() as temporary_directory:
+        test_image_logger_writes_source_only_test_images(Path(temporary_directory))

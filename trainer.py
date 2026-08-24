@@ -16,6 +16,13 @@ from data.gpu_aug import (
     random_normalize,
     simulate_slice_thickness,
 )
+from evaluation import (
+    masked_mae_with_scale,
+    masked_psnr,
+    masked_ssim_xy,
+    masked_xy_edge_strength_ratio,
+    masked_z_gradient_mae,
+)
 from losses.image import masked_xy_gradient_loss
 
 
@@ -54,20 +61,34 @@ class CustomModel(Model):
     上記リンクを参考に作成した。GANなど少し複雑なモデルの学習方法も書いてあります。
     """
 
+    EVALUATION_METRIC_NAMES = (
+        "ssim_xy_global",
+        "ssim_xy_heart",
+        "psnr_heart",
+        "mae_hu_heart",
+        "z_gradient_mae",
+        "xy_edge_strength_ratio",
+    )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.cfg = None
 
     @property
     def metrics_dict(self):
-        if not hasattr(self, "_metrics_dict") or len(self._metrics_dict) == 0:
+        if not hasattr(self, "_metrics_dict"):
             self._metrics_dict = {}
-            self._metrics_dict["rfr_loss"] = Mean(name="rfr_loss")
-            self._metrics_dict["gradient_loss"] = Mean(name="gradient_loss")
-            self._metrics_dict["mae"] = Mean(name="mae")
-            self._metrics_dict["mse"] = Mean(name="mse")
-            self._metrics_dict["psnr"] = Mean(name="psnr")
-            self._metrics_dict["total_loss"] = Mean(name="total_loss")
+        for name in (
+            "rfr_loss",
+            "gradient_loss",
+            "mae",
+            "mse",
+            "psnr",
+            "total_loss",
+            *self.EVALUATION_METRIC_NAMES,
+        ):
+            if name not in self._metrics_dict:
+                self._metrics_dict[name] = Mean(name=name)
         return self._metrics_dict
 
     @staticmethod
@@ -125,7 +146,7 @@ class CustomModel(Model):
         self.optimizer.apply_gradients(zip(gradients, trainable_weights))
         self._update_metrics(target_imgs, preds, img_msks, t=t)
 
-        return self._get_metrics_result()
+        return self._get_metrics_result(include_evaluation=False)
 
     def test_step(self, data):
         """
@@ -133,18 +154,31 @@ class CustomModel(Model):
         ./callbacks/image_logger.pyを参考にコールバックを実装する
         """
 
-        logits = self.predict_step(data, apply_self_supervised_blur=True)
-
+        img_msks = self._get_img_msks(data["msks"], self.cfg.bit_info.padding_bit)
+        heart_msks = self._get_heart_msks(data["msks"], self.cfg.bit_info.heart_bit)
+        initial_noise = self._make_validation_initial_noise(data["imgs"])
+        logits = self.predict_step(
+            data, apply_self_supervised_blur=True, initial_noise=initial_noise
+        )
         target_imgs = self.normalize_target(
             data["target_imgs"],
-            self._get_img_msks(data["msks"], self.cfg.bit_info.padding_bit),
+            img_msks,
             data["target_min_clip_vals"],
             data["target_max_clip_vals"],
         )
-        img_msks = self._get_img_msks(data["msks"], self.cfg.bit_info.padding_bit)
-        self._update_metrics(target_imgs, logits, img_msks, t=None)
+        self._update_metrics(
+            target_imgs,
+            logits,
+            img_msks,
+            t=None,
+            heart_msks=heart_msks,
+            intensity_range=(
+                data["target_max_clip_vals"] - data["target_min_clip_vals"]
+            ),
+            update_evaluation=True,
+        )
 
-        return self._get_metrics_result()
+        return self._get_metrics_result(include_evaluation=True)
 
     def _compute_rfr_total_loss(self, target_imgs, preds, img_msks, t):
         denominator = self.masked_denominator(img_msks, target_imgs)
@@ -165,7 +199,16 @@ class CustomModel(Model):
         )
         return self.cfg.loss.rfr.weight * rfr_loss + gradient_weight * gradient_loss
 
-    def _update_metrics(self, target_imgs, preds, img_msks, t=None):
+    def _update_metrics(
+        self,
+        target_imgs,
+        preds,
+        img_msks,
+        t=None,
+        heart_msks=None,
+        intensity_range=None,
+        update_evaluation=False,
+    ):
         target_imgs = tf.stop_gradient(target_imgs)
         preds = tf.stop_gradient(preds)
         img_msks = tf.stop_gradient(img_msks)
@@ -208,7 +251,76 @@ class CustomModel(Model):
         self.metrics_dict["psnr"].update_state(psnr)
         self.metrics_dict["total_loss"].update_state(total_loss)
 
+        if update_evaluation:
+            self._update_evaluation_metrics(
+                target_imgs, preds, img_msks, heart_msks, intensity_range
+            )
+
         return total_loss
+
+    def _update_evaluation_metrics(
+        self, target_imgs, preds, img_msks, heart_msks, intensity_range
+    ):
+        """Update final-image validation metrics; these are not train-step metrics."""
+        if heart_msks is None or intensity_range is None:
+            raise ValueError(
+                "heart_msks and intensity_range are required for evaluation metrics"
+            )
+
+        metric_cfg = self.cfg.evaluation_metrics
+        heart_msks = tf.cast(heart_msks, tf.float32) * tf.cast(img_msks, tf.float32)
+
+        def update(name, values, valid):
+            self.metrics_dict[name].update_state(
+                values, sample_weight=tf.cast(valid, tf.float32)
+            )
+
+        global_ssim, global_valid = masked_ssim_xy(
+            target_imgs,
+            preds,
+            img_msks,
+            max_val=1.0,
+            filter_size=int(metric_cfg.ssim_filter_size),
+            filter_sigma=float(metric_cfg.ssim_filter_sigma),
+        )
+        heart_ssim, heart_ssim_valid = masked_ssim_xy(
+            target_imgs,
+            preds,
+            heart_msks,
+            max_val=1.0,
+            filter_size=int(metric_cfg.ssim_filter_size),
+            filter_sigma=float(metric_cfg.ssim_filter_sigma),
+        )
+        heart_psnr, heart_psnr_valid = masked_psnr(
+            target_imgs, preds, heart_msks, max_val=1.0
+        )
+        heart_mae_hu, heart_mae_valid = masked_mae_with_scale(
+            target_imgs, preds, heart_msks, intensity_range
+        )
+        z_gradient_mae, z_gradient_valid = masked_z_gradient_mae(
+            target_imgs, preds, heart_msks
+        )
+        edge_ratio, edge_ratio_valid = masked_xy_edge_strength_ratio(
+            target_imgs, preds, heart_msks, epsilon=float(metric_cfg.edge_epsilon)
+        )
+
+        update("ssim_xy_global", global_ssim, global_valid)
+        update("ssim_xy_heart", heart_ssim, heart_ssim_valid)
+        update("psnr_heart", heart_psnr, heart_psnr_valid)
+        update("mae_hu_heart", heart_mae_hu, heart_mae_valid)
+        update("z_gradient_mae", z_gradient_mae, z_gradient_valid)
+        update("xy_edge_strength_ratio", edge_ratio, edge_ratio_valid)
+
+    def _make_validation_initial_noise(self, imgs):
+        """Use identical validation noise across epochs for comparable metrics."""
+        target_shape = tf.concat(
+            [tf.shape(imgs)[:-1], tf.constant([self.cfg.model.num_channel], tf.int32)],
+            axis=0,
+        )
+        seed = int(self.cfg.evaluation_metrics.validation_seed)
+        return tf.random.stateless_normal(
+            target_shape, seed=[seed, 0], dtype=tf.float32
+        )
 
     def predict_step(
         self,
@@ -391,11 +503,15 @@ class CustomModel(Model):
             )
         return imgs * img_msks
 
-    def _get_metrics_result(self):
+    def _get_metrics_result(self, include_evaluation=True):
         """
         Return the results of all metrics as a dictionary.
         """
-        return {metric.name: metric.result() for metric in self.metrics_dict.values()}
+        return {
+            metric.name: metric.result()
+            for metric in self.metrics_dict.values()
+            if include_evaluation or metric.name not in self.EVALUATION_METRIC_NAMES
+        }
 
     @property
     def metrics(self):

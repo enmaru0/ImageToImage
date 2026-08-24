@@ -204,3 +204,10 @@ image:
 bit_info:
   heart_bit: 6
   padding_bit: 15
+
+# validationの最終生成画像に対して計算する指標（trainのランダム時刻x0予測には適用しない）
+evaluation_metrics:
+  validation_seed: 0 # epoch間でI2I-RFR初期ノイズを固定
+  ssim_filter_size: 11 # axial 2D SSIMのGaussian window（正の奇数）
+  ssim_filter_sigma: 1.5
+  edge_epsilon: 1.0e-6
