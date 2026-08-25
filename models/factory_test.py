@@ -18,3 +18,23 @@ def test_pix2pix_downsample_factor_uses_its_own_depth_and_strides():
     )
 
     assert get_downsample_factor_zyx(cfg).tolist() == [1, 16, 16]
+
+
+def test_unet_downsample_factor_includes_selected_z_stages():
+    cfg = AttrDict(
+        name="unet",
+        unet=AttrDict(
+            pool_size_zyx=[1, 2, 2],
+            depth=4,
+            z_downsample_stages=[1, 2],
+            z_down_strides_zyx=[2, 1, 1],
+        ),
+    )
+
+    assert get_downsample_factor_zyx(cfg).tolist() == [4, 16, 16]
+
+
+if __name__ == "__main__":
+    test_model_name_aliases()
+    test_pix2pix_downsample_factor_uses_its_own_depth_and_strides()
+    test_unet_downsample_factor_includes_selected_z_stages()

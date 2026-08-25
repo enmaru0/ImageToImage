@@ -35,7 +35,7 @@ model:
   input_num_channel: 1
   num_channel: 1 # target image channels
   unet:
-    start_ch: 32
+    start_ch: 40
     depth: 4
     num_encode_blocks: 2
     num_decode_blocks: 1
@@ -44,6 +44,9 @@ model:
     # z_conv_interval回に1回だけZ方向も畳み込む
     z_conv_kernel_size_zyx: [3,3,3]
     z_conv_interval: 3 # 0にするとZ方向の間引き畳み込みを無効化
+    # scheduled 3D Convを[1,Y,X] -> [Z,1,1]へ分解し、残差接続を加える
+    factorized_z_conv: true
+    factorized_residual: true
     downsample_type: max_pool # max_pool or stride_conv
     pool_size_zyx: [1,2,2] # Z方向をdownsampleしない
     down_kernel_size_zyx: [1,3,3] # stride_conv用
@@ -51,6 +54,12 @@ model:
     up_kernel_size_zyx: [1,4,4]
     up_strides_zyx: [1,2,2]
     resize_conv_kernel_size_zyx: [1,3,3] # resize_conv用
+    # 0始まりのencoder stage番号。指定stageだけZを追加downsampleする
+    z_downsample_stages: [1,2]
+    z_down_kernel_size_zyx: [4,1,1]
+    z_down_strides_zyx: [2,1,1]
+    z_upsample_type: transpose_conv # transpose_conv or resize_conv
+    z_up_kernel_size_zyx: [4,1,1]
   # Pix2Pix Generatorのblock構成を3D CT向けに軽量化したモデル
   pix2pix_generator:
     start_ch: 16

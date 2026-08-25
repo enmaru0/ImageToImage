@@ -222,16 +222,60 @@ def read_cfg_and_parse_arg():
         raise ValueError("evaluation_metrics.edge_epsilonは0より大きくしてください")
     model_name = canonicalize_model_name(cfg.model.name)
     if model_name == "unet":
-        if cfg.model.unet.downsample_type not in ["max_pool", "stride_conv"]:
+        unet_cfg = cfg.model.unet
+        if unet_cfg.downsample_type not in ["max_pool", "stride_conv"]:
             raise ValueError(
                 "model.unet.downsample_typeはmax_poolまたはstride_convを"
                 "指定してください"
             )
-        if cfg.model.unet.upsample_type not in ["transpose_conv", "resize_conv"]:
+        if unet_cfg.upsample_type not in ["transpose_conv", "resize_conv"]:
             raise ValueError(
                 "model.unet.upsample_typeはtranspose_convまたはresize_convを"
                 "指定してください"
             )
+        for option_name in ["factorized_z_conv", "factorized_residual"]:
+            if not isinstance(getattr(unet_cfg, option_name), bool):
+                raise ValueError(f"model.unet.{option_name}はboolにしてください")
+        if unet_cfg.factorized_residual and not unet_cfg.factorized_z_conv:
+            raise ValueError(
+                "model.unet.factorized_residual=trueには"
+                "factorized_z_conv=trueが必要です"
+            )
+        if unet_cfg.factorized_z_conv and (
+            unet_cfg.z_conv_interval <= 0 or unet_cfg.z_conv_kernel_size_zyx is None
+        ):
+            raise ValueError(
+                "model.unet.factorized_z_conv=trueにはz_conv_interval > 0と"
+                "z_conv_kernel_size_zyxが必要です"
+            )
+
+        z_stages = [int(stage) for stage in unet_cfg.z_downsample_stages]
+        if len(set(z_stages)) != len(z_stages):
+            raise ValueError("model.unet.z_downsample_stagesに重複があります")
+        if any(stage < 0 or stage >= int(unet_cfg.depth) for stage in z_stages):
+            raise ValueError(
+                "model.unet.z_downsample_stagesは0以上depth未満にしてください"
+            )
+        if unet_cfg.z_upsample_type not in ["transpose_conv", "resize_conv"]:
+            raise ValueError(
+                "model.unet.z_upsample_typeはtranspose_convまたはresize_convを"
+                "指定してください"
+            )
+
+        z_down_kernel = [int(value) for value in unet_cfg.z_down_kernel_size_zyx]
+        z_down_strides = [int(value) for value in unet_cfg.z_down_strides_zyx]
+        z_up_kernel = [int(value) for value in unet_cfg.z_up_kernel_size_zyx]
+        for option_name, values in [
+            ("z_down_kernel_size_zyx", z_down_kernel),
+            ("z_down_strides_zyx", z_down_strides),
+            ("z_up_kernel_size_zyx", z_up_kernel),
+        ]:
+            if len(values) != 3 or min(values) <= 0:
+                raise ValueError(f"model.unet.{option_name}は正の[Z,Y,X]にしてください")
+        if z_down_kernel[1:] != [1, 1] or z_up_kernel[1:] != [1, 1]:
+            raise ValueError("Z専用down/up kernelのY/Xサイズは1にしてください")
+        if z_down_strides[0] <= 1 or z_down_strides[1:] != [1, 1]:
+            raise ValueError("model.unet.z_down_strides_zyxは[Z>1,1,1]にしてください")
     else:
         pix2pix_cfg = cfg.model.pix2pix_generator
         if pix2pix_cfg.depth < 2:

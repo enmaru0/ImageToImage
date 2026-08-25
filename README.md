@@ -234,7 +234,9 @@ aug:
     norm_spacing_zyx: [3.0,0.5,0.5]
 ```
 
-Z方向は8 sliceと薄いため、UNetではZ方向のdownsampleは行いません。一方で、Z方向の情報も完全には捨てず、一定間隔でのみZ方向を含む3D畳み込みを行います。
+Z方向は8 sliceと薄いため、通常の各stageではXY方向だけをdownsampleします。
+一方で、選択した中間stageだけZ方向をdownsampleし、一定間隔の3D畳み込みを
+XY畳み込みとZ畳み込みへ分解できます。
 
 ```yaml
 model:
@@ -242,6 +244,13 @@ model:
     conv_kernel_size_zyx: [1,3,3]
     z_conv_kernel_size_zyx: [3,3,3]
     z_conv_interval: 3
+    factorized_z_conv: true
+    factorized_residual: true
+    z_downsample_stages: [1,2]
+    z_down_kernel_size_zyx: [4,1,1]
+    z_down_strides_zyx: [2,1,1]
+    z_upsample_type: transpose_conv
+    z_up_kernel_size_zyx: [4,1,1]
     downsample_type: max_pool
     pool_size_zyx: [1,2,2]
     down_kernel_size_zyx: [1,3,3]
@@ -252,6 +261,31 @@ model:
 ```
 
 `z_conv_interval: 3` は「3個に1個のConv blockでZ方向も畳み込む」という意味です。`0` にするとZ方向の間引き畳み込みを無効化します。
+
+`factorized_z_conv: true`では、上記のscheduled `[3,3,3]` Convを
+`[1,3,3]` Convと`[3,1,1]` Convへ分解します。
+`factorized_residual: true`では、この分解blockへidentityまたは1x1 projectionの
+残差接続を追加します。
+
+`z_downsample_stages`は0始まりのencoder stage番号です。`[1,2]`ではstage 1と2の
+XY downsample後に、`Conv3D(kernel=[4,1,1], stride=[2,1,1])`でZだけを
+downsampleします。decoderでは対応するstageに
+`Conv3DTranspose(kernel=[4,1,1], stride=[2,1,1])`を適用してskip connectionと
+同じZサイズへ戻します。この構成の全体downsample倍率は`[4,16,16]`なので、
+標準crop `[8,192,192]`をそのまま使用できます。
+
+従来U-Netへ戻す場合は次のように指定します。
+
+```bash
+python main.py --overrides \
+  model.unet.factorized_z_conv=false \
+  model.unet.factorized_residual=false \
+  model.unet.z_downsample_stages=[] \
+  model.unet.start_ch=32
+```
+
+新旧構成ではlayer形状が異なるため、既存checkpointの重みを新構成へ直接ロード
+することはできません。
 
 downsampling/upsamplingは独立に切り替えられます。従来構成は
 `max_pool + transpose_conv`です。Stride Convとresize-convolutionを比較する場合は
@@ -311,7 +345,8 @@ model:
 ```
 
 `[8,192,192,2]`入力の標準設定では、軽量Generatorは387,415 parameters、
-既存U-Netは14,584,558 parametersです。軽量Generatorは約2.7%（約38分の1）
+factorized U-Net（`start_ch=40`）は15,663,579 parametersです。
+軽量Generatorは約2.5%（約40分の1）
 なので、速度・GPUメモリと復元性能の比較に使用できます。checkpointの形状は
 異なるため、U-Netの重みをPix2Pix Generatorへ直接ロードすることはできません。
 

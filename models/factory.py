@@ -39,6 +39,12 @@ def get_downsample_factor_zyx(model_cfg):
     if model_name == "unet":
         strides = np.asarray(model_cfg.unet.pool_size_zyx, dtype=np.int64)
         depth = int(model_cfg.unet.depth)
+        factor = np.power(strides, depth)
+        z_downsample_stages = list(getattr(model_cfg.unet, "z_downsample_stages", []))
+        if z_downsample_stages:
+            z_strides = np.asarray(model_cfg.unet.z_down_strides_zyx, dtype=np.int64)
+            factor *= np.power(z_strides, len(z_downsample_stages))
+        return factor
     else:
         strides = np.asarray(model_cfg.pix2pix_generator.strides_zyx, dtype=np.int64)
         depth = int(model_cfg.pix2pix_generator.depth)
