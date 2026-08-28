@@ -89,6 +89,18 @@ def load_config(args):
         raise ValueError("classifier_foldsは2以上にしてください")
     if float(calibration_cfg.score_distance_clip) <= 0:
         raise ValueError("score_distance_clipは0より大きくしてください")
+    context_crop_cfg = getattr(cfg.self_supervised_deblur, "context_crop", None)
+    if context_crop_cfg is not None:
+        if not isinstance(context_crop_cfg.enabled, bool):
+            raise ValueError(
+                "self_supervised_deblur.context_crop.enabledはboolにしてください"
+            )
+        context_margin = [int(value) for value in context_crop_cfg.margin_zyx]
+        if len(context_margin) != 3 or min(context_margin) < 0:
+            raise ValueError(
+                "self_supervised_deblur.context_crop.margin_zyxは"
+                "非負の[Z,Y,X]にしてください"
+            )
     pairing_cfg = calibration_cfg.pairing
     if not isinstance(pairing_cfg.enabled, bool):
         raise ValueError("degradation_calibration.pairing.enabledはboolにしてください")
@@ -223,7 +235,14 @@ def make_matching_manifest(clean_data_dict, real_data_dict, delimiter="_"):
 
 
 def load_cases(
-    data_dir, cfg, heart_bit, max_cases, seed, data_dict=None, group_by_patient=False
+    data_dir,
+    cfg,
+    heart_bit,
+    max_cases,
+    seed,
+    data_dict=None,
+    group_by_patient=False,
+    use_degradation_context=False,
 ):
     """Load deterministic heart-centred crops through the production DataLoader."""
     from data.dataloader import create_dataloader
@@ -244,6 +263,7 @@ def load_cases(
         cfg=loader_cfg,
         batch_size=int(cfg.degradation_calibration.batch_size),
         drop_remainder=False,
+        use_degradation_context=use_degradation_context,
     )
 
     cases = []
@@ -475,15 +495,27 @@ def simulate_cases(clean_cases, cfg, seed):
                 rng.random()
             ) < float(case_cfg.self_supervised_deblur.identity_probability):
                 degraded = case["image"].copy()
+            degraded = CustomModel.center_crop_to_model_size(
+                degraded[None], cfg
+            ).numpy()[0]
+            clean_image = CustomModel.center_crop_to_model_size(
+                case["image"][None], cfg
+            ).numpy()[0]
+            heart_mask = CustomModel.center_crop_to_model_size(
+                case["heart_mask"][None], cfg
+            ).numpy()[0]
+            valid_mask = CustomModel.center_crop_to_model_size(
+                case["valid_mask"][None], cfg
+            ).numpy()[0]
             simulated_cases.append(
                 {
                     "case_id": f"{case['case_id']}_sim{repetition}",
                     "patient_id": case.get("patient_id", case["case_id"]),
                     "group_id": case.get("group_id", case["case_id"]),
                     "image": degraded,
-                    "clean_image": case["image"],
-                    "heart_mask": case["heart_mask"],
-                    "valid_mask": case["valid_mask"],
+                    "clean_image": clean_image,
+                    "heart_mask": heart_mask,
+                    "valid_mask": valid_mask,
                 }
             )
     return simulated_cases
@@ -710,6 +742,7 @@ def main():
         seed,
         data_dict=clean_data_dict,
         group_by_patient=pairing_enabled,
+        use_degradation_context=True,
     )
     logging.info("実non-gatedデータを読み込みます")
     real_cases = load_cases(

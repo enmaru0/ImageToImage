@@ -60,6 +60,8 @@ def test_calibration_cli_creates_complete_report():
             "--overrides",
             "self_supervised_deblur.degradation_type=cardiac_motion",
             "self_supervised_deblur.slice_thickness.enabled=false",
+            "self_supervised_deblur.context_crop.enabled=true",
+            "self_supervised_deblur.context_crop.margin_zyx=[0,4,4]",
             "degradation_calibration.max_cases_per_domain=2",
             "degradation_calibration.batch_size=2",
             "degradation_calibration.search.num_trials=2",

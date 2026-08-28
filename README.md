@@ -93,6 +93,25 @@ self_supervised_deblur:
 - `cardiac_motion_gaussian` を指定すると、心拍motion後にGaussian blurも
   追加できます。まずは `cardiac_motion` 単独での比較を推奨します。
 
+画像端で心臓が見切れた状態でmotionを生成すると、画像外へ移動した構造を参照
+できず、二重線や折り返し状の境界が生じることがあります。`context_crop`を有効に
+すると、DataLoaderが各辺に余白を加えた大きな領域を読み込み、その領域上で
+motion、Gaussian、slice thickness、source artifactを適用してから、source、
+clean target、valid mask、heart maskを同じ中心位置で`aug.crop_size_zyx`へ戻します。
+
+```yaml
+self_supervised_deblur:
+  context_crop:
+    enabled: true
+    margin_zyx: [0, 32, 32] # 片側へ追加する[Z,Y,X] voxel数
+```
+
+例えば`crop_size_zyx: [8,192,192]`と上記設定では、劣化生成時だけ
+`[8,256,256]`を使用し、ネットワーク入力は従来どおり`[8,192,192]`です。
+通常の`predict.py`ではcontext cropを使用しません。元CTのFOV自体で心臓が
+切れている場合、または学習時に`organ_crop`で意図的に見切れさせる場合は、
+追加余白だけでは周囲情報を復元できません。
+
 これは画像空間の近似なので、CT投影角ごとのmotionに由来するstreak artifactを
 完全には再現しません。実データに合わせる際は、TensorBoardの `Source Images` と
 `Target Images` を比較し、移動量とROIを調整してください。

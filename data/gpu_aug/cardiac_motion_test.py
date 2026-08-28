@@ -227,7 +227,10 @@ def test_self_supervised_source_is_created_from_clean_target():
     cfg = OmegaConf.create(
         {
             "training_mode": "self_supervised_deblur",
-            "aug": {"affine": {"norm_spacing_zyx": [1.0, 1.0, 1.0]}},
+            "aug": {
+                "crop_size_zyx": [2, 8, 8],
+                "affine": {"norm_spacing_zyx": [1.0, 1.0, 1.0]},
+            },
             "self_supervised_deblur": {
                 "degradation_type": "cardiac_motion",
                 "cardiac_motion": _validation_kwargs(
@@ -256,3 +259,56 @@ def test_self_supervised_source_is_created_from_clean_target():
 
     np.testing.assert_allclose(target.numpy(), clean_target.numpy(), atol=1e-6)
     np.testing.assert_allclose(source.numpy(), clean_target.numpy(), atol=1e-6)
+
+
+def test_self_supervised_degradation_uses_context_then_center_crops():
+    class IdentitySignalAugModel(CustomModel):
+        @staticmethod
+        def gpu_shared_signal_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg):
+            del min_clip_vals, max_clip_vals, cfg
+            return imgs * img_msks
+
+        @staticmethod
+        def gpu_source_artifact_aug(imgs, img_msks, cfg):
+            del cfg
+            return imgs * img_msks
+
+    cfg = OmegaConf.create(
+        {
+            "training_mode": "self_supervised_deblur",
+            "aug": {
+                "crop_size_zyx": [2, 8, 8],
+                "affine": {"norm_spacing_zyx": [1.0, 1.0, 1.0]},
+            },
+            "self_supervised_deblur": {
+                "degradation_type": "cardiac_motion",
+                "cardiac_motion": _validation_kwargs(
+                    is_training=True, validation_translation_mm_yx=(0.0, 0.0)
+                ),
+            },
+        }
+    )
+    del cfg.self_supervised_deblur.cardiac_motion.spacing_mm_yx
+    del cfg.self_supervised_deblur.cardiac_motion.is_training
+    clean_target = tf.reshape(
+        tf.range(2 * 12 * 14, dtype=tf.float32), (1, 2, 12, 14, 1)
+    )
+    clean_target /= tf.reduce_max(clean_target)
+    img_msks = tf.ones_like(clean_target)
+    clip_values = tf.constant([0.0])
+
+    source, target = IdentitySignalAugModel.prepare_training_images(
+        tf.zeros_like(clean_target),
+        clean_target,
+        img_msks,
+        clip_values,
+        clip_values,
+        clip_values,
+        clip_values,
+        cfg,
+    )
+
+    expected = clean_target[:, :, 2:10, 3:11]
+    assert tuple(source.shape) == (1, 2, 8, 8, 1)
+    np.testing.assert_allclose(source.numpy(), expected.numpy(), atol=1e-6)
+    np.testing.assert_allclose(target.numpy(), expected.numpy(), atol=1e-6)

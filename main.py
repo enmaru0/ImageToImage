@@ -309,6 +309,20 @@ def read_cfg_and_parse_arg():
             f"{downsample_factor.tolist()} で割り切れる値にしてください"
         )
     if training_mode == "self_supervised_deblur":
+        context_crop_cfg = getattr(
+            cfg.self_supervised_deblur, "context_crop", None
+        )
+        if context_crop_cfg is not None:
+            if not isinstance(context_crop_cfg.enabled, bool):
+                raise ValueError(
+                    "self_supervised_deblur.context_crop.enabledはboolにしてください"
+                )
+            context_margin = [int(value) for value in context_crop_cfg.margin_zyx]
+            if len(context_margin) != 3 or min(context_margin) < 0:
+                raise ValueError(
+                    "self_supervised_deblur.context_crop.margin_zyxは"
+                    "非負の[Z,Y,X]にしてください"
+                )
         identity_probability = float(
             getattr(cfg.self_supervised_deblur, "identity_probability", 0.0)
         )
@@ -738,8 +752,12 @@ if __name__ == "__main__":
     )
 
     # トレーニングおよび検証用のDataLoaderを作成
-    train_loader = create_dataloader(train_dict, is_training=True, cfg=cfg)
-    val_loader = create_dataloader(val_dict, is_training=False, cfg=cfg)
+    train_loader = create_dataloader(
+        train_dict, is_training=True, cfg=cfg, use_degradation_context=True
+    )
+    val_loader = create_dataloader(
+        val_dict, is_training=False, cfg=cfg, use_degradation_context=True
+    )
     test_log_data = None
     if cfg.test_data_dir:
         require_heart_mask = bool(

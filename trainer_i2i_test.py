@@ -31,6 +31,7 @@ def _self_supervised_cfg(identity_probability=0.0):
         {
             "training_mode": "self_supervised_deblur",
             "aug": {
+                "crop_size_zyx": [8, 16, 16],
                 "random_normalize": {
                     "prob": 0.0,
                     "random_center_deviation": 0.0,
@@ -216,15 +217,16 @@ def test_residual_train_step_is_xla_compatible():
             heart_msks=None,
         ):
             del (
-                cls,
                 min_clip_vals,
                 max_clip_vals,
                 target_min_clip_vals,
                 target_max_clip_vals,
-                cfg,
                 heart_msks,
             )
-            return imgs * img_msks, target_imgs * img_msks
+            return (
+                cls.center_crop_to_model_size(imgs * img_msks, cfg),
+                cls.center_crop_to_model_size(target_imgs * img_msks, cfg),
+            )
 
     image_input = Input((2, 4, 4, 2), name="image")
     mask_input = Input((2, 4, 4, 1), name="mask")
@@ -232,6 +234,7 @@ def test_residual_train_step_is_xla_compatible():
     prediction = layers.Add()([prediction, layers.Rescaling(0.0)(mask_input)])
     model = NoAugModel(inputs=[image_input, mask_input], outputs=prediction)
     model.cfg = SimpleNamespace(
+        aug=SimpleNamespace(crop_size_zyx=[2, 4, 4]),
         bit_info=SimpleNamespace(heart_bit=6, padding_bit=15),
         model=SimpleNamespace(num_channel=1),
         i2i_rfr=SimpleNamespace(prediction_type="residual", p=1.0, t_min=0.01),
@@ -242,9 +245,9 @@ def test_residual_train_step_is_xla_compatible():
     )
     model.compile(optimizer=Adam(1e-3))
     data = {
-        "imgs": tf.fill((1, 2, 4, 4, 1), 0.3),
-        "target_imgs": tf.fill((1, 2, 4, 4, 1), 0.5),
-        "msks": tf.zeros((1, 2, 4, 4, 1), tf.uint16),
+        "imgs": tf.fill((1, 2, 8, 8, 1), 0.3),
+        "target_imgs": tf.fill((1, 2, 8, 8, 1), 0.5),
+        "msks": tf.zeros((1, 2, 8, 8, 1), tf.uint16),
         "min_clip_vals": tf.constant([0.0]),
         "max_clip_vals": tf.constant([1.0]),
         "target_min_clip_vals": tf.constant([0.0]),

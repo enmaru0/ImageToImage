@@ -102,6 +102,45 @@ class CustomModel(Model):
         """Extract the heart ROI stored in the configured bit of the mask."""
         return ops.cast((msks & (1 << heart_bit)) > 0, "float32")
 
+    @staticmethod
+    def center_crop_to_model_size(tensor, cfg):
+        """Crop a degradation-context tensor back to the network input size."""
+        tensor = tf.convert_to_tensor(tensor)
+        target_size = tf.constant(
+            [int(value) for value in cfg.aug.crop_size_zyx], tf.int32
+        )
+        input_size = tf.shape(tensor)[1:4]
+        static_input_size = tensor.shape.as_list()[1:4]
+        if all(value is not None for value in static_input_size):
+            if any(
+                int(input_value) < int(target_value)
+                for input_value, target_value in zip(
+                    static_input_size, cfg.aug.crop_size_zyx
+                )
+            ):
+                raise ValueError(
+                    "degradation context is smaller than aug.crop_size_zyx: "
+                    f"{static_input_size} < {list(cfg.aug.crop_size_zyx)}"
+                )
+        else:
+            tf.debugging.assert_greater_equal(
+                input_size,
+                target_size,
+                message="degradation context is smaller than aug.crop_size_zyx",
+            )
+        start = (input_size - target_size) // 2
+        begin = tf.concat([[0], start, [0]], axis=0)
+        size = tf.concat(
+            [[tf.shape(tensor)[0]], target_size, [tf.shape(tensor)[4]]], axis=0
+        )
+        cropped = tf.slice(tensor, begin, size)
+        static_shape = tensor.shape.as_list()
+        if static_shape is not None and len(static_shape) == 5:
+            cropped.set_shape(
+                [static_shape[0], *[int(v) for v in cfg.aug.crop_size_zyx], static_shape[4]]
+            )
+        return cropped
+
     def train_step(self, data):
         """
         ここのデータ名であったりselfに渡す引数を変えた場合は、
@@ -130,6 +169,8 @@ class CustomModel(Model):
             self.cfg,
             heart_msks=heart_msks,
         )
+        img_msks = self.center_crop_to_model_size(img_msks, self.cfg)
+        heart_msks = self.center_crop_to_model_size(heart_msks, self.cfg)
         with GradientTape() as tape:
             rfr_target = self.make_rfr_target(imgs, target_imgs, self.cfg)
             t = self.sample_rfr_time(target_imgs, self.cfg)
@@ -156,14 +197,18 @@ class CustomModel(Model):
         ./callbacks/image_logger.pyを参考にコールバックを実装する
         """
 
-        img_msks = self._get_img_msks(data["msks"], self.cfg.bit_info.padding_bit)
-        heart_msks = self._get_heart_msks(data["msks"], self.cfg.bit_info.heart_bit)
+        img_msks = self.center_crop_to_model_size(
+            self._get_img_msks(data["msks"], self.cfg.bit_info.padding_bit), self.cfg
+        )
+        heart_msks = self.center_crop_to_model_size(
+            self._get_heart_msks(data["msks"], self.cfg.bit_info.heart_bit), self.cfg
+        )
         initial_noise = self._make_validation_initial_noise(data["imgs"])
         logits = self.predict_step(
             data, apply_self_supervised_blur=True, initial_noise=initial_noise
         )
         target_imgs = self.normalize_target(
-            data["target_imgs"],
+            self.center_crop_to_model_size(data["target_imgs"], self.cfg),
             img_msks,
             data["target_min_clip_vals"],
             data["target_max_clip_vals"],
@@ -342,11 +387,15 @@ class CustomModel(Model):
             imgs = self.apply_self_supervised_deblur(
                 imgs, img_msks, self.cfg, is_training=False, heart_msks=heart_msks
             )
+        imgs = self.center_crop_to_model_size(imgs, self.cfg)
+        img_msks = self.center_crop_to_model_size(img_msks, self.cfg)
+        if initial_noise is not None:
+            initial_noise = self.center_crop_to_model_size(initial_noise, self.cfg)
         preds = self.i2i_rfr_inference(imgs, img_msks, initial_noise=initial_noise)
 
         if return_aux:
             target_imgs = self.normalize_target(
-                data["target_imgs"],
+                self.center_crop_to_model_size(data["target_imgs"], self.cfg),
                 img_msks,
                 data["target_min_clip_vals"],
                 data["target_max_clip_vals"],
@@ -508,6 +557,8 @@ class CustomModel(Model):
             )
             imgs = cls.gpu_source_artifact_aug(imgs, img_msks, cfg)
             imgs = cls.mix_identity_samples(imgs, target_imgs, cfg, is_training=True)
+            imgs = cls.center_crop_to_model_size(imgs, cfg)
+            target_imgs = cls.center_crop_to_model_size(target_imgs, cfg)
         else:
             imgs = cls.gpu_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg)
             target_imgs = cls.normalize_target(

@@ -27,14 +27,49 @@ from .utils import (
 )
 
 
+def get_preprocess_crop_size_zyx(cfg, use_degradation_context=False):
+    """Return the crop loaded by the CPU pipeline before synthetic degradation."""
+    model_crop_size = np.asarray(cfg.aug.crop_size_zyx, dtype=np.int32)
+    if not use_degradation_context:
+        return model_crop_size
+    if str(getattr(cfg, "training_mode", "paired")) != "self_supervised_deblur":
+        return model_crop_size
+    context_cfg = getattr(cfg.self_supervised_deblur, "context_crop", None)
+    if context_cfg is None or not bool(context_cfg.enabled):
+        return model_crop_size
+    margin = np.asarray(context_cfg.margin_zyx, dtype=np.int32)
+    if margin.shape != (3,) or np.any(margin < 0):
+        raise ValueError(
+            "self_supervised_deblur.context_crop.margin_zyxは"
+            "非負の[Z,Y,X]にしてください"
+        )
+    return model_crop_size + 2 * margin
+
+
+def _center_crop_np(array, output_size_zyx):
+    output_size = np.asarray(output_size_zyx, dtype=np.int32)
+    input_size = np.asarray(array.shape[:3], dtype=np.int32)
+    if np.any(output_size > input_size):
+        raise ValueError(f"center crop size exceeds input: {output_size} > {input_size}")
+    start = (input_size - output_size) // 2
+    end = start + output_size
+    return array[
+        start[0] : end[0], start[1] : end[1], start[2] : end[2], ...
+    ]
+
+
 def preprocess_image_np(
-    img_hdr_list_with_data_name: list[bytes], is_training: bool, cfg
+    img_hdr_list_with_data_name: list[bytes],
+    is_training: bool,
+    cfg,
+    use_degradation_context=False,
 ):
     img_hdr_path, target_hdr_path, _ = img_hdr_list_with_data_name
     img_hdr_path = Path(img_hdr_path.decode())
     target_hdr_path = Path(target_hdr_path.decode())
 
-    crop_size_zyx = cfg.aug.crop_size_zyx
+    model_crop_size_zyx = np.asarray(cfg.aug.crop_size_zyx, dtype=np.int32)
+    crop_size_zyx = get_preprocess_crop_size_zyx(cfg, use_degradation_context)
     # <image>.mask.hdrのheart_bitに心臓マスクが入っている。
     organ_hdr_path = img_hdr_path.with_suffix(".mask.hdr")
     heart_bit = int(cfg.bit_info.heart_bit)
@@ -92,7 +127,7 @@ def preprocess_image_np(
             body_box_zyxzyx,
             organ_box_zyxzyx,
             cfg.aug.random_crop_method,
-            crop_size_zyx,
+            model_crop_size_zyx,
             cfg.aug.affine.norm_spacing_zyx,
             cfg.aug.margin,
             cfg.aug.crop_keep_ratio,
@@ -125,8 +160,9 @@ def preprocess_image_np(
         msk = affine_transform.apply(
             raw_msk, affine_matrix, order=0, cval=1 << cfg.bit_info.padding_bit
         )
+        foreground_msk = _center_crop_np(msk, model_crop_size_zyx)
         if not enforce_foreground_crop or has_foreground_in_every_z_slice(
-            msk, int(cfg.bit_info.heart_bit), min_foreground_voxels
+            foreground_msk, int(cfg.bit_info.heart_bit), min_foreground_voxels
         ):
             break
     else:
@@ -221,9 +257,19 @@ def preprocess_image_np(
     )
 
 
-def preprocess_image(img_hdr_path_with_data_name, is_training: bool, cfg):
+def preprocess_image(
+    img_hdr_path_with_data_name,
+    is_training: bool,
+    cfg,
+    use_degradation_context=False,
+):
     def _preprocess_image_np(img_hdr_path_with_data_name):
-        return preprocess_image_np(img_hdr_path_with_data_name, is_training, cfg)
+        return preprocess_image_np(
+            img_hdr_path_with_data_name,
+            is_training,
+            cfg,
+            use_degradation_context=use_degradation_context,
+        )
 
     (
         img,
@@ -250,10 +296,13 @@ def preprocess_image(img_hdr_path_with_data_name, is_training: bool, cfg):
     )
 
     # tf.numpy_functionを使ったときはset_shapeでshapeを指定する
-    img_shape = tuple(cfg.aug.crop_size_zyx) + (1,)
+    preprocess_crop_size = get_preprocess_crop_size_zyx(
+        cfg, use_degradation_context
+    )
+    img_shape = tuple(preprocess_crop_size) + (1,)
     img.set_shape(img_shape)
     target_img.set_shape(img_shape)
-    msk_shape = tuple(cfg.aug.crop_size_zyx) + (
+    msk_shape = tuple(preprocess_crop_size) + (
         1,
     )  # trainer.pyでチャンネルの分割（one-hot化など）は行う
     msk.set_shape(msk_shape)
@@ -312,6 +361,7 @@ def create_dataloader(
     cfg,
     batch_size: int | None = None,
     drop_remainder: bool = True,
+    use_degradation_context: bool = False,
 ):
     """
     複数のデータセットから異なる確率で読み込むデータローダーを作成する
@@ -408,7 +458,12 @@ def create_dataloader(
         dataset = dataset.shuffle(buffer_size=len(img_hdr_path_list))
 
     def _preprocess_image(img_hdr_path_with_data_name):
-        return preprocess_image(img_hdr_path_with_data_name, is_training, cfg)
+        return preprocess_image(
+            img_hdr_path_with_data_name,
+            is_training,
+            cfg,
+            use_degradation_context=use_degradation_context,
+        )
 
     dataset = dataset.map(
         _preprocess_image, num_parallel_calls=cfg.num_workers

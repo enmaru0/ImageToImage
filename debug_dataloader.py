@@ -114,7 +114,12 @@ if __name__ == "__main__":
             img_hdr_dict = val_dict
             save_dir = save_root / "sample_val"
         save_dir.mkdir(exist_ok=True)
-        loader = create_dataloader(img_hdr_dict, is_training=is_training, cfg=cfg)
+        loader = create_dataloader(
+            img_hdr_dict,
+            is_training=is_training,
+            cfg=cfg,
+            use_degradation_context=True,
+        )
         for num, batch in enumerate(loader):
             if num == 2:
                 # バッチサイズx2で停止
@@ -161,6 +166,13 @@ if __name__ == "__main__":
                     batch["target_min_clip_vals"],
                     batch["target_max_clip_vals"],
                 )
+                batch["imgs"] = CustomModel.center_crop_to_model_size(
+                    batch["imgs"], cfg
+                )
+                batch["target_imgs"] = CustomModel.center_crop_to_model_size(
+                    batch["target_imgs"], cfg
+                )
+            batch["msks"] = CustomModel.center_crop_to_model_size(batch["msks"], cfg)
             # Numpyに変換
             batch = {k: v.numpy() for k, v in batch.items()}
 

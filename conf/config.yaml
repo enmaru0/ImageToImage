@@ -146,6 +146,11 @@ aug:
 
 # 単一ディレクトリの画像をclean targetとし、入力側に合成blurを加える設定
 self_supervised_deblur:
+  # 大きな領域で劣化を生成してからaug.crop_size_zyxへcenter cropする。
+  # margin_zyxは片側の追加voxel数。ネットワーク入力サイズは変わらない。
+  context_crop:
+    enabled: False
+    margin_zyx: [0,32,32]
   # 学習時に症例単位で劣化を完全にスキップする割合。validationには適用しない。
   identity_probability: 0.25
   # gaussian / cardiac_motion / cardiac_motion_gaussian

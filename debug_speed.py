@@ -13,8 +13,12 @@ if __name__ == "__main__":
     img_hdr_dict = {"DataSetA": {"img_hdr_list": img_hdr_path, "freq": 1.0}}
 
     # Create training and validation DataLoader
-    train_loader = create_dataloader(img_hdr_dict, is_training=True, cfg=cfg)
-    val_loader = create_dataloader(img_hdr_dict, is_training=False, cfg=cfg)
+    train_loader = create_dataloader(
+        img_hdr_dict, is_training=True, cfg=cfg, use_degradation_context=True
+    )
+    val_loader = create_dataloader(
+        img_hdr_dict, is_training=False, cfg=cfg, use_degradation_context=True
+    )
 
     # # Iterate through batches in the DataLoader
     tick = time.time()
