@@ -2,6 +2,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import tensorflow as tf
 from omegaconf import OmegaConf
 
 from calibrate_degradation import (
@@ -72,8 +73,13 @@ def test_simulation_and_montage_smoke():
     with tempfile.TemporaryDirectory() as temp_dir:
         output_dir = Path(temp_dir)
         save_montages(simulated, clean_cases, output_dir, cfg)
-        assert len(list(output_dir.glob("*.png"))) == 1
-        assert (output_dir / "README.txt").exists()
+        montage_paths = list(output_dir.glob("*.png"))
+        assert len(montage_paths) == 1
+        montage = tf.io.decode_png(tf.io.read_file(str(montage_paths[0])))
+        assert tuple(montage.shape) == (32, 5 * 32 + 4 * 4, 3)
+        assert "real non-gated-clean difference" in (
+            output_dir / "README.txt"
+        ).read_text(encoding="utf-8")
 
 
 def test_best_override_contains_only_training_degradation_section():

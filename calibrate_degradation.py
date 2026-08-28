@@ -527,9 +527,12 @@ def _gray_panel(image, z_index):
     return np.repeat(gray[..., None], 3, axis=-1)
 
 
-def _difference_panel(clean, simulated, z_index, scale):
+def _difference_panel(reference, comparison, reference_z, scale, comparison_z=None):
+    if comparison_z is None:
+        comparison_z = reference_z
     difference = (
-        np.asarray(simulated)[z_index, ..., 0] - np.asarray(clean)[z_index, ..., 0]
+        np.asarray(comparison)[comparison_z, ..., 0]
+        - np.asarray(reference)[reference_z, ..., 0]
     ) * float(scale)
     positive = np.clip(difference, 0.0, 1.0)
     negative = np.clip(-difference, 0.0, 1.0)
@@ -574,19 +577,20 @@ def save_montages(simulated_cases, real_cases, output_dir, cfg):
                 clean_z,
                 cfg.degradation_calibration.difference_display_scale,
             ),
+            _difference_panel(
+                simulated["clean_image"],
+                real["image"],
+                clean_z,
+                cfg.degradation_calibration.difference_display_scale,
+                comparison_z=real_z,
+            ),
         ]
-        montage = np.concatenate(
-            [
-                panels[0],
-                separator,
-                panels[1],
-                separator,
-                panels[2],
-                separator,
-                panels[3],
-            ],
-            axis=1,
-        )
+        montage_parts = []
+        for panel in panels:
+            if montage_parts:
+                montage_parts.append(separator)
+            montage_parts.append(panel)
+        montage = np.concatenate(montage_parts, axis=1)
         filename = _safe_filename(simulated["case_id"]) + ".png"
         encoded = tf.io.encode_png(tf.convert_to_tensor(montage))
         tf.io.write_file(str(output_dir / filename), encoded)
@@ -594,7 +598,8 @@ def save_montages(simulated_cases, real_cases, output_dir, cfg):
     (output_dir / "README.txt").write_text(
         f"Left to right: clean | simulated degradation | {real_description} "
         "real non-gated | "
-        "simulated-clean difference (red=positive, blue=negative).\n",
+        "simulated-clean difference | real non-gated-clean difference "
+        "(differences: red=positive, blue=negative).\n",
         encoding="utf-8",
     )
 

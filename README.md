@@ -160,7 +160,7 @@ results/cardiac_calibration/
     feature_summary.csv
     paired_feature_summary.csv
     paired_patient_feature_details.csv
-    montages/                   # clean | simulated | matched real | difference
+    montages/                   # clean | simulated | matched real | sim-clean | real-clean
 ```
 
 `score`、`mean_abs_standardized_mean_difference`、
