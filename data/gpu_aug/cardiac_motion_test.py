@@ -215,8 +215,13 @@ def test_roi_attenuates_displacement_instead_of_blending_intensities():
 def test_self_supervised_source_is_created_from_clean_target():
     class IdentitySignalAugModel(CustomModel):
         @staticmethod
-        def gpu_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg):
+        def gpu_shared_signal_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg):
             del min_clip_vals, max_clip_vals, cfg
+            return imgs * img_msks
+
+        @staticmethod
+        def gpu_source_artifact_aug(imgs, img_msks, cfg):
+            del cfg
             return imgs * img_msks
 
     cfg = OmegaConf.create(

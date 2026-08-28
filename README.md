@@ -33,10 +33,20 @@ blurの強さはvoxel単位のsigmaで設定し、学習時は画像ごとに範
 
 ```yaml
 self_supervised_deblur:
+  identity_probability: 0.25
   degradation_type: gaussian
   sigma_range: [0.5, 2.0]
   validation_sigma: 1.25
 ```
+
+`identity_probability`は、学習batch内の症例ごとに全劣化をスキップして
+`source == target`とする確率です。標準の`0.25`では約25%をidentity pairとし、
+不要な補正を抑えます。validationでは常に設定した劣化を適用します。
+
+self-supervisedモードでは、正規化とgamma補正だけをsource/targetで共有します。
+`random_sharpness`、`random_gauss_filter`、`random_gauss_noise`はclean targetを
+変更せず、劣化後のsourceだけへ適用されます。境界haloをclean targetへ
+混入させないため、sharpnessとnoiseは標準では無効です。
 
 ### 心臓CTのmotion blur近似
 
@@ -86,6 +96,61 @@ self_supervised_deblur:
 これは画像空間の近似なので、CT投影角ごとのmotionに由来するstreak artifactを
 完全には再現しません。実データに合わせる際は、TensorBoardの `Source Images` と
 `Target Images` を比較し、移動量とROIを調整してください。
+
+### 実non-gated分布へのシミュレータ校正
+
+`calibrate_degradation.py`は、clean CTから作った合成劣化と実non-gated CTを
+心臓中心の同一shape・spacingへ前処理し、非対応症例の分布として比較します。
+両データには各画像と同じbasenameの`.mask.hdr`が必要です。
+
+```bash
+python calibrate_degradation.py \
+  --clean-data-dir datasets_clean \
+  --real-data-dir datasets_non_gated \
+  --output-dir results/cardiac_calibration \
+  --overrides \
+    self_supervised_deblur.degradation_type=cardiac_motion_gaussian \
+    degradation_calibration.real_heart_bit=3 \
+    degradation_calibration.search.num_trials=20
+```
+
+`real_heart_bit: null`では学習用の`bit_info.heart_bit`を使用します。実データだけ
+心臓bitが異なる場合は上の例のように指定します。trial 0は現在の
+`self_supervised_deblur`設定、trial 1以降は`degradation_calibration.search`の
+範囲から再現可能な乱数で設定を選びます。同じseedで校正全体を再実行すると、
+同じtrial設定が生成されます。
+
+評価には心臓マスクを`roi_margin_px`だけXY方向へ広げた領域を使い、以下を
+症例ごとに測定します。
+
+- HU正規化後の強度分布
+- XY/Z勾配とXY Laplacian
+- 方向別勾配比とZ連続性
+- XY power spectrum
+- edge自己相関
+- 交差検証した線形domain classifierのAUC
+
+主な出力は次の通りです。
+
+```text
+results/cardiac_calibration/
+  calibration_config.yaml       # 実行時の全設定
+  real_case_features.csv        # 実データの症例別特徴量
+  trials.csv                    # score順のtrial一覧
+  best_config.yaml              # 最良trialの学習用override
+  report.json                   # 最良scoreとAUCの要約
+  trial_000/
+    simulated_case_features.csv
+    feature_summary.csv
+    montages/                   # clean | simulated | real | simulated-clean
+```
+
+`score`、`mean_abs_standardized_mean_difference`、
+`mean_normalized_wasserstein`は低いほど近く、domain AUCは0.5に近いほど
+区別しにくいことを示します。`best_config.yaml`は全設定ではなく、選択された
+`self_supervised_deblur`項目だけを含むため、学習設定へmergeして使用します。
+低いscoreは画像統計の一致を示すだけで、motionの解剖学的妥当性は保証しません。
+各trialのmontageも確認してから採用してください。
 
 ### スライス厚の追加劣化
 
@@ -146,7 +211,9 @@ datasets_images/
 sourceとclean targetは、学習時のTensorBoardに記録される `Source Images` と
 `Target Images` で確認できます。
 
-自己教師ありモードでは、正規化、gamma、sharpness、noiseなど既存の信号augmentationをsource/targetで共有します。clean targetへ共有augmentationを一度だけ適用してsourceへコピーし、そのsourceだけに選択した劣化を加えます。
+自己教師ありモードでは正規化とgammaをsource/targetで共有します。clean targetへ
+共有augmentationを一度だけ適用してsourceへコピーし、そのsourceだけに選択した
+劣化とsharpness、追加blur、noiseを適用します。
 
 なお、この方式は「元画像よりさらにぼかした画像 → 元画像」という再劣化ペアを作る自己教師あり学習です。入力画像自体に強いblurが含まれている場合、その完全にsharpな正解画像を直接与える方式ではありません。
 
@@ -364,7 +431,11 @@ python main.py --overrides \
 
 ## I2I-RFR
 
-学習時は、target画像 `y` とノイズ `eps` から以下の状態を作ります。
+`i2i_rfr.prediction_type`で、RFRが輸送する対象を選択できます。
+
+### image予測（従来方式）
+
+target画像 `y` とノイズ `eps` から以下の状態を作ります。
 
 ```text
 y_t = (1 - t) * y + t * eps
@@ -376,11 +447,43 @@ y_t = (1 - t) * y + t * eps
 f([x; y_t]) -> y
 ```
 
+### residual予測（標準）
+
+deblurではclean targetとsourceの差分をRFRのclean endpointにします。
+
+```text
+r = y - x
+r_t = (1 - t) * r + t * eps
+f([x; r_t]) -> r
+prediction = clip(x + r, 0, 1)
+```
+
+ネットワーク内部のResidual接続とは別の機能です。最終画像をsourceへ明示的に
+anchorするため、劣化がない領域ではゼロ補正を学習しやすくなります。
+
+```yaml
+i2i_rfr:
+  prediction_type: residual # image / residual
+```
+
 損失は論文に従い、`t` で重み付けしたpixel lossです。
 
 ```text
 |y - f([x; y_t])| / t
 ```
+
+XY gradient補助lossはpixel lossと異なり、標準では`1/t`を適用しません。
+
+```yaml
+loss:
+  gradient:
+    weight: 0.01
+    time_reweight: false
+```
+
+従来実験を再現するときだけ`prediction_type: image`、
+`time_reweight: true`を指定してください。これらの項目を持たない古い
+`output.yaml`は従来値として解釈されます。
 
 推論時はノイズから開始し、設定された `i2i_rfr.inference_steps` 回のEuler更新でtarget側へ戻します。デフォルトは3 stepです。
 

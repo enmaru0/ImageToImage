@@ -108,14 +108,17 @@ aug:
     random_shift_rate_zyx: [0.,0.,0.] # 回転中心をランダムに選ぶのでここは０にした
   
   random_sharpness:
-    prob: 0.1 # 10%の確率でシャープネスを加える
+    # self-supervisedではclean targetには適用せずsourceだけに適用する。
+    # deblur targetへhaloを混入させないため標準では無効。
+    prob: 0.0
     sigma: 3.0
     alpha_range: [0.,2.]
   random_gauss_filter:
     prob: 0.0
     sigma_range: [0.5,2.0]
   random_gauss_noise:
-    prob: 0.05
+    # self-supervisedではclean targetには適用せずsourceだけに適用する。
+    prob: 0.0
     stddev_range: [0.0,0.05]
   random_normalize:
     prob: 0.0 # 50%の確率で正規化を行う
@@ -143,6 +146,8 @@ aug:
 
 # 単一ディレクトリの画像をclean targetとし、入力側に合成blurを加える設定
 self_supervised_deblur:
+  # 学習時に症例単位で劣化を完全にスキップする割合。validationには適用しない。
+  identity_probability: 0.25
   # gaussian / cardiac_motion / cardiac_motion_gaussian
   degradation_type: gaussian
   sigma_range: [0.5,2.0] # 学習時に画像ごとに選ぶGaussian sigma（voxel単位）
@@ -188,18 +193,60 @@ self_supervised_deblur:
     profile_model: gaussian_fwhm
     gaussian_truncate: 3.0
 
+# 実non-gatedとclean画像から生成した劣化画像の分布を比較する。
+# python calibrate_degradation.py --clean-data-dir ... --real-data-dir ...
+degradation_calibration:
+  clean_data_dir: ""
+  real_data_dir: ""
+  output_dir: results/degradation_calibration
+  clean_heart_bit: null # nullはbit_info.heart_bit
+  real_heart_bit: null # 実データだけheart bitが異なる場合に指定
+  max_cases_per_domain: 32 # 0で全症例
+  batch_size: 4
+  simulations_per_clean: 1
+  seed: 0
+  roi_margin_px: 8 # 心臓境界外のartifactも含めるXY margin
+  max_autocorrelation_lag_px: 12
+  classifier_folds: 5
+  classifier_l2: 0.1
+  score_distance_clip: 10.0 # 低分散の単一特徴が総合scoreを支配するのを防ぐ
+  montages_per_trial: 4
+  difference_display_scale: 4.0
+  apply_identity_mixture: true
+  search:
+    # trial 0は現在のself_supervised_deblur設定。残りを下記範囲から探索する。
+    num_trials: 12
+    translation_mm_y_range: [1.0,6.0]
+    translation_mm_x_range: [1.0,6.0]
+    rotation_deg_range: [0.0,6.0]
+    scale_delta_range: [0.0,0.08]
+    temporal_asymmetry_range: [0.0,0.4]
+    z_phase_offset_range: [0.0,0.8]
+    heart_mask_softening_px_range: [2,12]
+    uniform_phase_weight_mix_range: [0.0,0.3]
+    bimodal_peak_center_range: [0.15,0.5]
+    bimodal_peak_half_width_range: [0.02,0.15]
+    bimodal_balance_half_width_range: [0.05,0.3]
+    gaussian_sigma_min_range: [0.2,1.2]
+    gaussian_sigma_max_range: [1.0,3.0]
+    identity_probability_range: [0.0,0.3]
+
 i2i_rfr:
   p: 1.0 # 論文デフォルト: L1
   t_min: 0.01
   inference_steps: 3
   clip_output: True
+  # image: clean画像を直接予測、residual: clean-sourceを予測してsourceへ加算
+  prediction_type: residual
 
 loss:
   rfr:
     weight: 1.0
   # XYの輪郭位置をtargetへ揃える補助損失。強すぎると境界を過強調する
   gradient:
-    weight: 0.05
+    weight: 0.01
+    # I2I-RFRの1/tはpixel lossだけに適用し、補助lossには適用しない
+    time_reweight: false
 
 image:
   modality: CT # CT or MR　画像の正規化方法を変えます

@@ -131,14 +131,16 @@ class CustomModel(Model):
             heart_msks=heart_msks,
         )
         with GradientTape() as tape:
+            rfr_target = self.make_rfr_target(imgs, target_imgs, self.cfg)
             t = self.sample_rfr_time(target_imgs, self.cfg)
-            eps = tf.random.normal(tf.shape(target_imgs), dtype=target_imgs.dtype)
-            noisy_target = (1.0 - t) * target_imgs + t * eps
+            eps = tf.random.normal(tf.shape(rfr_target), dtype=rfr_target.dtype)
+            noisy_target = (1.0 - t) * rfr_target + t * eps
 
             # モデルのフォワード&バックワードパス
-            preds = self(
+            pred_state = self(
                 [self.concat_i2i_input(imgs, noisy_target), img_msks], training=True
             )
+            preds = self.reconstruct_rfr_prediction(imgs, pred_state, self.cfg)
 
             total_loss = self._compute_rfr_total_loss(target_imgs, preds, img_msks, t)
         trainable_weights = self.trainable_variables
@@ -191,9 +193,7 @@ class CustomModel(Model):
         else:
             pixel_error = ops.power(abs_error, p)
         rfr_loss = ops.sum(pixel_error / ops.power(t, p) * img_msks) / denominator
-        gradient_loss = masked_xy_gradient_loss(
-            target_imgs, preds, img_msks, time_weight=t
-        )
+        gradient_loss = self.compute_gradient_loss(target_imgs, preds, img_msks, t=t)
         gradient_weight = float(
             getattr(getattr(self.cfg.loss, "gradient", None), "weight", 0.0)
         )
@@ -235,9 +235,7 @@ class CustomModel(Model):
                 pixel_error = ops.power(abs_error, p)
             rfr_loss = ops.sum(pixel_error / ops.power(t, p) * img_msks) / denominator
 
-        gradient_loss = masked_xy_gradient_loss(
-            target_imgs, preds, img_msks, time_weight=t
-        )
+        gradient_loss = self.compute_gradient_loss(target_imgs, preds, img_msks, t=t)
         gradient_weight = float(
             getattr(getattr(self.cfg.loss, "gradient", None), "weight", 0.0)
         )
@@ -363,6 +361,34 @@ class CustomModel(Model):
         return ops.concatenate([imgs, target_state], axis=-1)
 
     @staticmethod
+    def get_prediction_type(cfg):
+        """Resolve the RFR prediction space while accepting old output configs."""
+        return str(getattr(cfg.i2i_rfr, "prediction_type", "image"))
+
+    @classmethod
+    def make_rfr_target(cls, imgs, target_imgs, cfg):
+        """Return the clean endpoint represented as an image or source residual."""
+        if cls.get_prediction_type(cfg) == "residual":
+            return target_imgs - imgs
+        return target_imgs
+
+    @classmethod
+    def reconstruct_rfr_prediction(cls, imgs, prediction_state, cfg):
+        """Map the model prediction space back to a reconstructed target image."""
+        if cls.get_prediction_type(cfg) == "residual":
+            return imgs + prediction_state
+        return prediction_state
+
+    def compute_gradient_loss(self, target_imgs, preds, img_msks, t=None):
+        """Compute the auxiliary gradient loss with optional legacy t weighting."""
+        gradient_cfg = getattr(self.cfg.loss, "gradient", None)
+        time_reweight = bool(getattr(gradient_cfg, "time_reweight", True))
+        time_weight = t if time_reweight else None
+        return masked_xy_gradient_loss(
+            target_imgs, preds, img_msks, time_weight=time_weight
+        )
+
+    @staticmethod
     def masked_denominator(img_msks, target_imgs):
         num_channel = tf.cast(tf.shape(target_imgs)[-1], tf.float32)
         return tf.maximum(tf.reduce_sum(img_msks) * num_channel, 1.0)
@@ -402,19 +428,24 @@ class CustomModel(Model):
             velocity = (target_state - pred_x0) / t
             target_state = target_state - dt * velocity
 
+        preds = self.reconstruct_rfr_prediction(imgs, target_state, self.cfg)
         if self.cfg.i2i_rfr.clip_output:
-            target_state = ops.clip(target_state, 0, 1)
-        return target_state * img_msks
+            preds = ops.clip(preds, 0, 1)
+        return preds * img_msks
 
     @staticmethod
-    def gpu_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg):
-        # ランダムに正規化中心と幅を変えながら正規化する
+    def gpu_shared_signal_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg):
+        """Apply signal transforms that are safe to share between source/target."""
         imgs = random_normalize(
             imgs, min_clip_vals, max_clip_vals, **cfg.aug.random_normalize
         )
-        # ガンマ補正
         imgs = random_gamma_correction(imgs, **cfg.aug.random_gamma_correction)
-        # sharpness or gaussian filter
+        imgs = ops.clip(imgs, 0, 1)
+        return imgs * img_msks
+
+    @staticmethod
+    def gpu_source_artifact_aug(imgs, img_msks, cfg):
+        """Apply sharpness/blur/noise to source only, never to a clean target."""
         imgs = apply_random_sharpness_or_gaussian_filter(
             imgs,
             cfg.aug.random_sharpness.prob,
@@ -424,12 +455,31 @@ class CustomModel(Model):
             cfg.aug.random_gauss_filter.sigma_range,
         )
 
-        # gaussian noise
         imgs = apply_random_gaussian_noise(imgs, **cfg.aug.random_gauss_noise)
-
         imgs = ops.clip(imgs, 0, 1)
-        imgs = imgs * img_msks
-        return imgs
+        return imgs * img_msks
+
+    @classmethod
+    def gpu_aug(cls, imgs, img_msks, min_clip_vals, max_clip_vals, cfg):
+        """Apply the complete source augmentation pipeline for paired training."""
+        imgs = cls.gpu_shared_signal_aug(
+            imgs, img_msks, min_clip_vals, max_clip_vals, cfg
+        )
+        return cls.gpu_source_artifact_aug(imgs, img_msks, cfg)
+
+    @staticmethod
+    def mix_identity_samples(degraded_imgs, clean_imgs, cfg, is_training):
+        """Replace random training samples with exact clean/source identity pairs."""
+        probability = float(
+            getattr(cfg.self_supervised_deblur, "identity_probability", 0.0)
+        )
+        if not is_training or probability <= 0:
+            return degraded_imgs
+        if probability >= 1:
+            return clean_imgs
+        batch_size = tf.shape(clean_imgs)[0]
+        use_identity = tf.random.uniform((batch_size, 1, 1, 1, 1)) < probability
+        return tf.where(use_identity, clean_imgs, degraded_imgs)
 
     @classmethod
     def prepare_training_images(
@@ -447,15 +497,17 @@ class CustomModel(Model):
         """Prepare source/target while keeping self-supervised signals aligned."""
         training_mode = str(getattr(cfg, "training_mode", "paired"))
         if training_mode == "self_supervised_deblur":
-            # clean targetに信号augmentationを一度だけ適用してsourceへコピーする。
-            # これにより信号変換は共有し、以下の劣化だけをsource/target差分にする。
-            target_imgs = cls.gpu_aug(
+            # 正規化/gammaだけをclean targetとsourceで共有する。Sharpness、追加blur、
+            # noiseはclean targetを汚さないよう、劣化後のsourceだけへ適用する。
+            target_imgs = cls.gpu_shared_signal_aug(
                 target_imgs, img_msks, target_min_clip_vals, target_max_clip_vals, cfg
             )
             imgs = tf.identity(target_imgs)
             imgs = cls.apply_self_supervised_deblur(
                 imgs, img_msks, cfg, is_training=True, heart_msks=heart_msks
             )
+            imgs = cls.gpu_source_artifact_aug(imgs, img_msks, cfg)
+            imgs = cls.mix_identity_samples(imgs, target_imgs, cfg, is_training=True)
         else:
             imgs = cls.gpu_aug(imgs, img_msks, min_clip_vals, max_clip_vals, cfg)
             target_imgs = cls.normalize_target(

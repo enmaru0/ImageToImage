@@ -206,6 +206,15 @@ def read_cfg_and_parse_arg():
     gradient_loss_cfg = getattr(cfg.loss, "gradient", None)
     if gradient_loss_cfg is not None and gradient_loss_cfg.weight < 0:
         raise ValueError("loss.gradient.weightは0以上にしてください")
+    if gradient_loss_cfg is not None and not isinstance(
+        getattr(gradient_loss_cfg, "time_reweight", True), bool
+    ):
+        raise ValueError("loss.gradient.time_reweightはboolにしてください")
+    prediction_type = str(getattr(cfg.i2i_rfr, "prediction_type", "image"))
+    if prediction_type not in ["image", "residual"]:
+        raise ValueError(
+            "i2i_rfr.prediction_typeはimageまたはresidualを指定してください"
+        )
     metric_cfg = cfg.evaluation_metrics
     ssim_filter_size = int(metric_cfg.ssim_filter_size)
     if ssim_filter_size <= 0 or ssim_filter_size % 2 == 0:
@@ -300,6 +309,13 @@ def read_cfg_and_parse_arg():
             f"{downsample_factor.tolist()} で割り切れる値にしてください"
         )
     if training_mode == "self_supervised_deblur":
+        identity_probability = float(
+            getattr(cfg.self_supervised_deblur, "identity_probability", 0.0)
+        )
+        if not 0 <= identity_probability <= 1:
+            raise ValueError(
+                "self_supervised_deblur.identity_probabilityは0-1にしてください"
+            )
         degradation_type = str(
             getattr(cfg.self_supervised_deblur, "degradation_type", "gaussian")
         )
