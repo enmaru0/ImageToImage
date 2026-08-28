@@ -439,7 +439,109 @@ def feature_dicts_to_matrix(records, feature_names=FEATURE_NAMES):
     )
 
 
-def aggregate_calibration_score(summary_rows, domain_auc, distance_clip=10.0):
+def compare_paired_feature_groups(
+    simulated,
+    real,
+    simulated_groups,
+    real_groups,
+    feature_names=FEATURE_NAMES,
+    distance_clip=10.0,
+):
+    """Compare patient-matched feature means without requiring voxel registration."""
+    simulated = np.asarray(simulated, np.float64)
+    real = np.asarray(real, np.float64)
+    simulated_groups = np.asarray(simulated_groups, object)
+    real_groups = np.asarray(real_groups, object)
+    if simulated.shape[1] != len(feature_names) or real.shape[1] != len(feature_names):
+        raise ValueError("feature matrix width does not match feature_names")
+    if len(simulated_groups) != len(simulated) or len(real_groups) != len(real):
+        raise ValueError("group list length must match its feature matrix")
+
+    common_groups = sorted(set(simulated_groups) & set(real_groups))
+    if len(common_groups) < 2:
+        raise ValueError("paired comparison requires at least two common groups")
+
+    simulated_means = np.asarray(
+        [
+            np.nanmean(simulated[simulated_groups == group], axis=0)
+            for group in common_groups
+        ]
+    )
+    real_means = np.asarray(
+        [np.nanmean(real[real_groups == group], axis=0) for group in common_groups]
+    )
+    summary_rows = []
+    detail_rows = []
+    normalized_distances = []
+    correlations = []
+    for feature_index, feature_name in enumerate(feature_names):
+        sim_values = simulated_means[:, feature_index]
+        real_values = real_means[:, feature_index]
+        valid = np.isfinite(sim_values) & np.isfinite(real_values)
+        sim_values = sim_values[valid]
+        real_values = real_values[valid]
+        valid_groups = np.asarray(common_groups, object)[valid]
+        if not len(sim_values):
+            summary_rows.append(
+                {
+                    "feature": feature_name,
+                    "paired_mean_signed_difference": math.nan,
+                    "paired_mean_absolute_difference": math.nan,
+                    "paired_normalized_mae": math.nan,
+                    "paired_correlation": math.nan,
+                }
+            )
+            continue
+
+        difference = sim_values - real_values
+        simulated_std = float(np.std(sim_values))
+        real_std = float(np.std(real_values))
+        pooled_scale = max(math.sqrt((simulated_std**2 + real_std**2) / 2.0), 1e-8)
+        normalized_mae = float(np.mean(np.abs(difference))) / pooled_scale
+        correlation = math.nan
+        if len(sim_values) >= 2 and simulated_std > 1e-8 and real_std > 1e-8:
+            correlation = float(np.corrcoef(sim_values, real_values)[0, 1])
+            correlations.append(correlation)
+        normalized_distances.append(min(normalized_mae, float(distance_clip)))
+        summary_rows.append(
+            {
+                "feature": feature_name,
+                "paired_mean_signed_difference": float(np.mean(difference)),
+                "paired_mean_absolute_difference": float(np.mean(np.abs(difference))),
+                "paired_normalized_mae": normalized_mae,
+                "paired_correlation": correlation,
+            }
+        )
+        for group, simulated_value, real_value, delta in zip(
+            valid_groups, sim_values, real_values, difference
+        ):
+            detail_rows.append(
+                {
+                    "patient_id": group,
+                    "feature": feature_name,
+                    "simulated_mean": float(simulated_value),
+                    "real_mean": float(real_value),
+                    "signed_difference": float(delta),
+                    "absolute_difference": float(abs(delta)),
+                }
+            )
+    metrics = {
+        "num_paired_patients": len(common_groups),
+        "paired_normalized_mae": float(np.mean(normalized_distances)),
+        "paired_mean_feature_correlation": (
+            float(np.mean(correlations)) if correlations else math.nan
+        ),
+    }
+    return summary_rows, detail_rows, metrics
+
+
+def aggregate_calibration_score(
+    summary_rows,
+    domain_auc,
+    distance_clip=10.0,
+    paired_distance=None,
+    paired_distance_weight=0.0,
+):
     """Combine interpretable feature distances and domain separability; lower is better."""
     smd = np.asarray(
         [abs(row["standardized_mean_difference"]) for row in summary_rows], np.float64
@@ -458,9 +560,13 @@ def aggregate_calibration_score(summary_rows, domain_auc, distance_clip=10.0):
     auc_penalty = 0.0
     if np.isfinite(domain_auc):
         auc_penalty = 2.0 * abs(float(domain_auc) - 0.5)
+    paired_penalty = 0.0
+    if paired_distance is not None and np.isfinite(paired_distance):
+        paired_penalty = float(paired_distance_weight) * float(paired_distance)
     return {
         "mean_abs_standardized_mean_difference": mean_abs_smd,
         "mean_normalized_wasserstein": mean_wasserstein,
         "domain_auc_penalty": auc_penalty,
-        "score": mean_abs_smd + mean_wasserstein + auc_penalty,
+        "paired_distance_penalty": paired_penalty,
+        "score": mean_abs_smd + mean_wasserstein + auc_penalty + paired_penalty,
     }

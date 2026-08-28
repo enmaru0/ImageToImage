@@ -201,7 +201,13 @@ degradation_calibration:
   output_dir: results/degradation_calibration
   clean_heart_bit: null # nullはbit_info.heart_bit
   real_heart_bit: null # 実データだけheart bitが異なる場合に指定
-  max_cases_per_domain: 32 # 0で全症例
+  max_cases_per_domain: 32 # 0で全症例。paired時は最大共通患者数
+  pairing:
+    enabled: false
+    # ファイル名をdelimiterで分割した最初の文字列を患者IDとする
+    delimiter: "_"
+    # 患者対応特徴距離を総合scoreへ加える重み
+    score_weight: 1.0
   batch_size: 4
   simulations_per_clean: 1
   seed: 0

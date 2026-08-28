@@ -1,5 +1,6 @@
 """End-to-end CLI smoke test for the generic med3d-dl container."""
 
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -21,7 +22,8 @@ def _write_case(data_dir, case_index, real_domain):
         image = np.round(
             0.5 * np.roll(image, -2, axis=2) + 0.5 * np.roll(image, 2, axis=2)
         ).astype(np.int16)
-    image_path = data_dir / f"case{case_index}.hdr"
+    domain_name = "nongated" if real_domain else "gated"
+    image_path = data_dir / f"patient{case_index}_{domain_name}.hdr"
     save_raw(image, spacing, image_path)
 
     packed_mask = heart.astype(np.uint16) * (1 << 6)
@@ -63,6 +65,7 @@ def test_calibration_cli_creates_complete_report():
             "degradation_calibration.search.num_trials=2",
             "degradation_calibration.montages_per_trial=1",
             "degradation_calibration.apply_identity_mixture=false",
+            "degradation_calibration.pairing.enabled=true",
             "aug.crop_size_zyx=[8,32,32]",
             "num_workers=1",
         ]
@@ -72,10 +75,19 @@ def test_calibration_cli_creates_complete_report():
             sys.argv = previous_argv
 
         assert (output_dir / "trials.csv").exists()
+        assert (output_dir / "matched_patients.csv").exists()
         assert (output_dir / "best_config.yaml").exists()
         assert (output_dir / "report.json").exists()
         assert (output_dir / "trial_000" / "feature_summary.csv").exists()
+        assert (output_dir / "trial_000" / "paired_feature_summary.csv").exists()
+        assert (
+            output_dir / "trial_000" / "paired_patient_feature_details.csv"
+        ).exists()
         assert len(list((output_dir / "trial_001" / "montages").glob("*.png"))) == 1
+        report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+        assert report["pairing_enabled"] is True
+        assert report["num_matched_patient_ids"] == 2
+        assert report["paired_normalized_mae"] is not None
 
 
 if __name__ == "__main__":

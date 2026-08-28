@@ -99,8 +99,9 @@ self_supervised_deblur:
 
 ### 実non-gated分布へのシミュレータ校正
 
-`calibrate_degradation.py`は、clean CTから作った合成劣化と実non-gated CTを
-心臓中心の同一shape・spacingへ前処理し、非対応症例の分布として比較します。
+`calibrate_degradation.py`は、clean gated CTから作った合成劣化と実non-gated CTを
+心臓中心の同一shape・spacingへ前処理して比較します。非対応分布比較に加え、
+ファイル名から同一患者を照合した患者対応比較を選択できます。
 両データには各画像と同じbasenameの`.mask.hdr`が必要です。
 
 ```bash
@@ -110,12 +111,21 @@ python calibrate_degradation.py \
   --output-dir results/cardiac_calibration \
   --overrides \
     self_supervised_deblur.degradation_type=cardiac_motion_gaussian \
+    degradation_calibration.pairing.enabled=true \
+    degradation_calibration.clean_heart_bit=6 \
     degradation_calibration.real_heart_bit=3 \
     degradation_calibration.search.num_trials=20
 ```
 
-`real_heart_bit: null`では学習用の`bit_info.heart_bit`を使用します。実データだけ
-心臓bitが異なる場合は上の例のように指定します。trial 0は現在の
+`pairing.enabled: true`では、拡張子を除いたファイル名を`_`で分割し、最初の
+文字列を患者IDとして使用します。例えば`0123_gated.hdr`と
+`0123_nongated.hdr`は患者`0123`の対応データです。両フォルダに存在する患者だけを
+使用し、片側にしかない患者はwarningを出して除外します。同じ患者に複数シリーズが
+ある場合、全シリーズを読み込み、校正特徴量を患者単位で平均します。
+`max_cases_per_domain`は患者対応モードでは最大共通患者数になります。
+
+`clean_heart_bit`と`real_heart_bit`は独立に指定できます。`null`では学習用の
+`bit_info.heart_bit`を使用します。trial 0は現在の
 `self_supervised_deblur`設定、trial 1以降は`degradation_calibration.search`の
 範囲から再現可能な乱数で設定を選びます。同じseedで校正全体を再実行すると、
 同じtrial設定が生成されます。
@@ -129,12 +139,18 @@ python calibrate_degradation.py \
 - XY power spectrum
 - edge自己相関
 - 交差検証した線形domain classifierのAUC
+- 同一患者内の合成／実データ特徴距離と患者間相関
+
+患者対応比較はvoxel位置が一致していることを仮定しません。gated/non-gated間で
+厳密な位置合わせがなくても利用できます。montageの実non-gated画像も同一患者から
+選択されます。
 
 主な出力は次の通りです。
 
 ```text
 results/cardiac_calibration/
   calibration_config.yaml       # 実行時の全設定
+  matched_patients.csv          # 患者IDと実際に対応付けた両側ファイル
   real_case_features.csv        # 実データの症例別特徴量
   trials.csv                    # score順のtrial一覧
   best_config.yaml              # 最良trialの学習用override
@@ -142,12 +158,16 @@ results/cardiac_calibration/
   trial_000/
     simulated_case_features.csv
     feature_summary.csv
-    montages/                   # clean | simulated | real | simulated-clean
+    paired_feature_summary.csv
+    paired_patient_feature_details.csv
+    montages/                   # clean | simulated | matched real | difference
 ```
 
 `score`、`mean_abs_standardized_mean_difference`、
 `mean_normalized_wasserstein`は低いほど近く、domain AUCは0.5に近いほど
-区別しにくいことを示します。`best_config.yaml`は全設定ではなく、選択された
+区別しにくいことを示します。患者対応モードでは`paired_normalized_mae`も低いほど
+同一患者内で近く、`pairing.score_weight`を掛けて総合scoreへ追加します。
+`best_config.yaml`は全設定ではなく、選択された
 `self_supervised_deblur`項目だけを含むため、学習設定へmergeして使用します。
 低いscoreは画像統計の一致を示すだけで、motionの解剖学的妥当性は保証しません。
 各trialのmontageも確認してから採用してください。

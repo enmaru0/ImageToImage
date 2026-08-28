@@ -3,6 +3,7 @@ import numpy as np
 from .degradation import (
     FEATURE_NAMES,
     aggregate_calibration_score,
+    compare_paired_feature_groups,
     compare_feature_distributions,
     cross_validated_domain_auc,
     extract_volume_features,
@@ -58,8 +59,23 @@ def test_feature_dicts_to_matrix_follows_declared_column_order():
     assert np.array_equal(matrix[0], np.arange(len(FEATURE_NAMES)))
 
 
+def test_patient_matched_features_average_multiple_series_per_patient():
+    simulated = np.repeat(np.asarray([[0.0], [2.0], [4.0]]), len(FEATURE_NAMES), axis=1)
+    real = np.repeat(np.asarray([[1.5], [4.5]]), len(FEATURE_NAMES), axis=1)
+    summary, details, metrics = compare_paired_feature_groups(
+        simulated, real, simulated_groups=["p0", "p0", "p1"], real_groups=["p0", "p1"]
+    )
+
+    assert metrics["num_paired_patients"] == 2
+    assert np.isclose(metrics["paired_normalized_mae"], 1.0 / 3.0)
+    assert np.isclose(metrics["paired_mean_feature_correlation"], 1.0)
+    assert len(summary) == len(FEATURE_NAMES)
+    assert len(details) == 2 * len(FEATURE_NAMES)
+
+
 if __name__ == "__main__":
     test_extract_volume_features_returns_finite_expected_vector()
     test_identical_feature_distributions_have_zero_distance_and_score()
     test_cross_validated_domain_auc_detects_separated_domains()
     test_feature_dicts_to_matrix_follows_declared_column_order()
+    test_patient_matched_features_average_multiple_series_per_patient()
